@@ -3,9 +3,9 @@ OPTIMISTS (Optimized PareTo Inverse Modeling through Integrated STochastic Searc
 
 OPTIMISTS' implementation can be coupled with any model whose state variables can be represented with a vector of real-coded values. The repository includes two specific case studies, where OPTIMISTS has been integrated with the VIC (Variable Infiltration Capacity)  modeling engine for large-scale hydrologic forecasting, and with the DHSVM (Distributed Hydrology Soil Vegetation Model) modeling engine for high-resolution hydrologic forecasting.
 
-Citation: Hernández, F., & Liang, X. (2018). "Hybridizing Bayesian and variational data assimilation for high-resolution hydrologic forecasting". Hydrol. Earth Syst. Sci. (Please cite this article if you use OPTIMISTS.)
+OPTIMISTS was developed at the University of Pittsburgh by Felipe Hernández under the supervision of Xu Liang, with funding support from the U.S. Department of Transportation (award OASRTRS-14-H-PIT) and from the William Kepler Whiteford Professorship of the University of Pittsburgh.
 
-OPTIMISTS was developed at the University of Pittsburgh by Felipe Hernández under the supervision of Xu Liang, with funding from the U.S. Department of Transportation (award OASRTRS-14-H-PIT) and through the William Kepler Whiteford Professorship of the University of Pittsburgh.
+Citation: Hernández, F., & Liang, X. (2018). "Hybridizing Bayesian and variational data assimilation for high-resolution hydrologic forecasting". Hydrol. Earth Syst. Sci. (Please cite this article if you use OPTIMISTS.)
 
 Copyright 2018 University of Pittsburgh
 
