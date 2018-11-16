@@ -16,6 +16,10 @@
  * supervision of Xu Liang, with funding from the U.S. Department of Transportation
  * (award OASRTRS-14-H-PIT) and through the William Kepler Whiteford Professorship of the
  * University of Pittsburgh.
+ * 
+ * Citation: Hernández, F. and Liang, X.: Hybridizing Bayesian and variational data assimilation
+ * for high-resolution hydrologic forecasting, Hydrol. Earth Syst. Sci., 22, 5759-5779,
+ * https://doi.org/10.5194/hess-22-5759-2018, 2018.
  */
 
 package optimists.dhsvm.dual;
@@ -54,9 +58,9 @@ import probDist.multiVar.tools.GGMLiteCreator;
 import probDist.multiVar.tools.Sample;
 
 /**
- * Citation: Hernández, F., & Liang, X. (2018). "Hybridizing Bayesian and variational data
- * assimilation for high-resolution hydrologic forecasting". Hydrol. Earth Syst. Sci.
- * (Please cite this article if you use OPTIMISTS.)
+ * Citation: Hernández, F. and Liang, X.: Hybridizing Bayesian and variational data assimilation
+ * for high-resolution hydrologic forecasting, Hydrol. Earth Syst. Sci., 22, 5759-5779,
+ * https://doi.org/10.5194/hess-22-5759-2018, 2018.
  * 
  * @author Felipe Hernández (developer)
  * @author Xu Liang (advisor)
