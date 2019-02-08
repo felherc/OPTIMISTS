@@ -35,7 +35,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Hashtable;
@@ -156,12 +155,12 @@ public class BlueRiverSimulation implements ModelConfigurator
 		// Setup initial distribution
 		State exampleState				= new State(exampleStateFile, exampleRoutingFile);
 		ArrayList<ContVar> variables	= getVariables(soils, exampleState);
-		BlueRiverSimulation configurator		= new BlueRiverSimulation(soils, network, exampleState, directFractions,
-														dimLimit, corrThreshold, distributionType,
-														scaling, silverman, ggmCreator);
-		NonParametric initialState = createInitialState(initStateFile, variables, ensembleSize,
-													distributionType, scaling, silverman, dimLimit,
-													ggmCreator, corrThreshold, configurator);
+		BlueRiverSimulation configurator = new BlueRiverSimulation(soils, network, exampleState,
+												directFractions, dimLimit, corrThreshold,
+												distributionType, scaling, silverman, ggmCreator);
+		ArrayList<ContMultiSample> initialState = createInitialState(initStateFile, variables,
+											ensembleSize, distributionType, scaling, silverman,
+											dimLimit, ggmCreator, corrThreshold, configurator);
 		
 		// Perform forecast
 		VICAssimilator assimilator		= new VICAssimilator(parameterFolder, configurator, 
@@ -169,7 +168,7 @@ public class BlueRiverSimulation implements ModelConfigurator
 				vicExec, simMaxTime, maxEvalsPerParticle, maxForecasts, removeFiles, null, false,
 				false, false, false, false, false, false, false, false);
 		assimilator.prepareForecast(initialState, start, modelsFolder);
-		NonParametric finalState		= assimilator.forecast(end, forecastFolder, true,
+		ArrayList<ContMultiSample> finalState = assimilator.forecast(end, forecastFolder, true,
 														false, threadCount, false);
 		Hashtable<LocalDateTime, KernelDensity> qts = assimilator.getDistForecastQ();
 		Hashtable<LocalDateTime, KernelDensity> sts = assimilator.getDistForecastSM();
@@ -186,7 +185,7 @@ public class BlueRiverSimulation implements ModelConfigurator
 		PrintWriter out	= new PrintWriter(new BufferedWriter(new FileWriter(stateFile, false)));
 		out.println(builder.toString());
 		int index					= 1;
-		for (ContMultiSample particle : finalState.getSamples())
+		for (ContMultiSample particle : finalState)
 		{
 			builder						= new StringBuilder(index + "\t" + particle.getWeight());
 			for (Double value : particle.getValues())
@@ -275,7 +274,7 @@ public class BlueRiverSimulation implements ModelConfigurator
 		return variables;
 	}
 	
-	private static NonParametric createInitialState(String initStateFile,
+	private static ArrayList<ContMultiSample> createInitialState(String initStateFile,
 				ArrayList<ContVar> variables, int sampleCount, int distType, double scaling, 
 				boolean silverman, int dimLimit, GGMLiteCreator ggmCreator, double corrThreshold,
 				ModelConfigurator configurator) throws FileNotFoundException
@@ -312,11 +311,7 @@ public class BlueRiverSimulation implements ModelConfigurator
 		scanner.close();
 		
 		// Create distribution
-		Collections.shuffle(samples);
-		int origSize						= samples.size();
-		for (int s = sampleCount; s < origSize; s++)
-			samples.remove(samples.size() - 1);
-		return configurator.createDistribution(samples);
+		return samples;
 	}
 	
 	private ArrayList<Soil>				origSoils;

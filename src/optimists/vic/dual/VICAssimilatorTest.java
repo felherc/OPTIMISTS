@@ -49,13 +49,8 @@ import org.apache.commons.io.FileUtils;
 
 import maestro_mo.ContVar;
 import maestro_mo.MAESTRO;
-import optimists.OPTIMISTS;
 import probDist.ContProbDist;
 import probDist.KernelDensity;
-import probDist.multiVar.EnsembleGGMLite;
-import probDist.multiVar.KD_GGMLite;
-import probDist.multiVar.MultiVarKernelDensity;
-import probDist.multiVar.NonParametric;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
 import probDist.multiVar.tools.Sample;
@@ -108,13 +103,6 @@ public class VICAssimilatorTest
 	private String					outputFolder;
 	private DateTimeFormatter		formatter;
 	
-	private int						dimLimit;
-	private double					corrThreshold;
-	private int						distType;
-	private double					scaling;
-	private boolean					silverman;
-	private GGMLiteCreator			ggmCreator;
-	
 	private TreeSet<LocalDateTime>	stateList;					
 	private String					statesFolder;
 	private String					stateFileHeader;
@@ -156,24 +144,18 @@ public class VICAssimilatorTest
 	
 	public void testAssimilator(String testName, int runIndex, String outputFolder,
 			String modelsFolder, LocalDateTime forecastStart, LocalDateTime forecastEnd,
-			Duration daTimeStep, ArrayList<Duration> leadTimes, NonParametric baseState,
-			LocalDateTime baseStateTime, ArrayList<ContVar> variables, MAESTRO maestro,
-			int ensembleSize, int candidateCount, int populationSize, int maxEvaluations,
-			double samplePercentage, double rootPercentage, int dimLimit, double corrThreshold,
-			int distType, double scaling, boolean silverman, GGMLiteCreator ggmCreator,
-			boolean weightPerFront, double particleGreed, int threadCount,
-			boolean assimilatorReports, boolean maestroReports, String hallOfFameFolder,
-			long timeLimit, int rankHistogramBins) throws IOException
+			Duration daTimeStep, ArrayList<Duration> leadTimes,
+			ArrayList<ContMultiSample> baseState, LocalDateTime baseStateTime,
+			ArrayList<ContVar> variables, MAESTRO maestro, int ensembleSize, int candidateCount,
+			int populationSize, int maxEvaluations, double samplePercentage, double rootPercentage,
+			int dimLimit, double corrThreshold, int distType, double scaling, boolean silverman,
+			GGMLiteCreator ggmCreator, boolean weightPerFront, double particleGreed,
+			int threadCount, boolean assimilatorReports, boolean maestroReports,
+			String hallOfFameFolder, long timeLimit, int rankHistogramBins) throws IOException
 	{
 		this.outputFolder					= outputFolder;
 		this.modelsFolder					= modelsFolder;
 		this.threadCount					= threadCount;
-		this.dimLimit						= dimLimit;
-		this.corrThreshold					= corrThreshold;
-		this.distType						= distType;
-		this.scaling						= scaling;
-		this.silverman						= silverman;
-		this.ggmCreator						= ggmCreator;
 		
 		toDelete							= new HashSet<>();
 		
@@ -240,7 +222,7 @@ public class VICAssimilatorTest
 		{
 			// Prepare assimilation
 			LocalDateTime daStart			= current.minus(daTimeStep);
-			NonParametric initState			= getState(daStart);
+			ArrayList<ContMultiSample> initState = getState(daStart);
 			String strDT					= formatter.format(current);			
 			String daRunName				= testName + "_" + strDT;
 			String folder					= outputFolder + "/" + DA_FOLDER + "/" + strDT;
@@ -255,12 +237,12 @@ public class VICAssimilatorTest
 					rootPercentage, dimLimit, corrThreshold, distType, scaling, silverman,
 					ggmCreator, weightPerFront, particleGreed, threadCount, assimilatorReports,
 					maestroReports, false, hallOfFameFolder, timeLimit);
-			NonParametric targetState		= assimilator.getTargetState();
+			ArrayList<ContMultiSample> targetState = assimilator.getTargetState();
 			writeStateToFile(current, targetState);
 			
 			// Perform forecast
 			LocalDateTime dateTime			= current;
-			NonParametric state				= targetState;
+			ArrayList<ContMultiSample> state = targetState;
 			for (Duration leadTime : leadTimes)
 			{
 				LocalDateTime end			= current.plus(leadTime);
@@ -330,14 +312,14 @@ public class VICAssimilatorTest
 		System.out.println("\nFinished!");
 	}
 	
-	private NonParametric getState(LocalDateTime dateTime) throws IOException
+	private ArrayList<ContMultiSample> getState(LocalDateTime dateTime) throws IOException
 	{
 		String strDT				= formatter.format(dateTime);
 		
 		// Try loading initial state
 		try
 		{
-			NonParametric state		= readStateFromFile(dateTime);
+			ArrayList<ContMultiSample> state = readStateFromFile(dateTime);
 			if (!stateList.contains(dateTime))
 				stateList.add(dateTime);
 			System.out.println("\nLoaded initial state (" + strDT + ")...");
@@ -349,25 +331,25 @@ public class VICAssimilatorTest
 		
 		System.out.println("\nPreparing initial state for assimilation (" + strDT + ")...");
 		LocalDateTime baseDT		= stateList.lower(dateTime);
-		NonParametric baseState		= readStateFromFile(baseDT);
+		ArrayList<ContMultiSample> baseState = readStateFromFile(baseDT);
 		String folder				= modelsFolder + "/" + MODELS_PREP_FOLDER + "/" + strDT;
 		Files.createDirectory(FileSystems.getDefault().getPath(folder));
 		assimilator.prepareForecast(baseState, baseDT, folder);
-		NonParametric state			= assimilator.forecast(dateTime, folder, false, false,
+		ArrayList<ContMultiSample> state = assimilator.forecast(dateTime, folder, false, false,
 															threadCount, removeDAModelFiles);
 		writeStateToFile(dateTime, state);
 		stateList.add(dateTime);
 		return state;
 	}
 
-	private void writeStateToFile(LocalDateTime dateTime, NonParametric stateDistribution)
-					throws IOException
+	private void writeStateToFile(LocalDateTime dateTime,
+							ArrayList<ContMultiSample> stateDistribution) throws IOException
 	{
 		String fileName				= statesFolder + "/" + formatter.format(dateTime) + ".txt";
 		PrintWriter out	= new PrintWriter(new BufferedWriter(new FileWriter(fileName, false)));
 		out.println(stateFileHeader);
 		int index					= 1;
-		for (ContMultiSample particle : stateDistribution.getSamples())
+		for (ContMultiSample particle : stateDistribution)
 		{
 			StringBuilder builder	= new StringBuilder(index + "\t" + particle.getWeight());
 			for (Double value : particle.getValues())
@@ -381,7 +363,7 @@ public class VICAssimilatorTest
 		stateList.add(dateTime);
 	}
 	
-	private NonParametric readStateFromFile(LocalDateTime dateTime)
+	private ArrayList<ContMultiSample> readStateFromFile(LocalDateTime dateTime)
 	{
 		DateTimeFormatter formatter	= DateTimeFormatter.ofPattern(STATE_FILE_DT_FORMAT);
 		String fileName				= statesFolder + "/" + formatter.format(dateTime) + ".txt";
@@ -402,45 +384,7 @@ public class VICAssimilatorTest
 					values.add(Double.valueOf(tokens[v]));
 				samples.add(new Sample(weight, values));
 			}
-			
-			// Create distribution
-			NonParametric dist		= null;
-			if (distType == OPTIMISTS.TYPE_D_KERNEL || distType == OPTIMISTS.TYPE_F_KERNEL)
-			{
-				dist				= new MultiVarKernelDensity(true);
-				dist.setSamples(samples);
-				if (distType == OPTIMISTS.TYPE_D_KERNEL)
-				{
-					if (Double.isNaN(scaling))
-						((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
-					else
-						((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
-				}
-				else
-				{
-					if (Double.isNaN(scaling))
-						((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
-																			corrThreshold);
-					else
-						((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
-																			corrThreshold);
-				}
-			}
-			else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-			{
-				dist				= new EnsembleGGMLite(true);
-				dist.setSamples(samples);
-			}
-			else if (distType == OPTIMISTS.TYPE_KD_GGM_LITE)
-			{
-				dist				= new KD_GGMLite(true);
-				dist.setSamples(samples);
-				if (ggmCreator == null)
-					((KD_GGMLite)dist).computeGaussianBW(scaling);
-				else
-					((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
-			}
-			return dist;
+			return samples;
 		} catch (Exception e)
 		{
 			throw new RuntimeException(e.getMessage());
@@ -451,7 +395,7 @@ public class VICAssimilatorTest
 	}
 
 	private void storeResults(LocalDateTime dateTime, Duration leadTime,
-			NonParametric state, KernelDensity streamflow, KernelDensity evaporation,
+			ArrayList<ContMultiSample> state, KernelDensity streamflow, KernelDensity evaporation,
 			KernelDensity soilMoisture) throws IOException
 	{
 		// Get strings

@@ -208,6 +208,11 @@ public class OPTIMISTS
 	private int runIndex;
 	
 	/**
+	 * Instance of the class that performs the assimilation
+	 */
+	private Assimilator assimilator;
+	
+	/**
 	 * Implementation of the {@link Particle} interface provided by the user that allows running
 	 * the simulations and computing the objective values for candidate states of the model 
 	 */
@@ -382,6 +387,7 @@ public class OPTIMISTS
 	{
 		this.daProblem				= daProblem;
 		this.runIndex				= runIndex;
+		this.assimilator			= null;
 		this.defaultParticle		= defaultParticle;
 		this.stateVariables			= stateVariables;
 		this.objectives				= objectives;
@@ -679,12 +685,14 @@ public class OPTIMISTS
 	 * distribution of state variables to compute the final/target distribution
 	 * @param start			Modeling time stamp of the beginning of the data assimilation time step
 	 * @param end			Modeling time stamp of the end of the data assimilation time step
-	 * @param sourceState	Probability distribution of the initial or source state variables
+	 * @param sourceState	The weighted samples that represent the probability distribution of the
+	 * 						source state variables
 	 * @param timeLimit		Time limit for data assimilation in milliseconds
-	 * @return				The probability distribution of the final or target state variables
+	 * @return				The weighted samples that represent the probability distribution of the
+	 * 						target state variables
 	 */
-	public NonParametric performDATimeStep(LocalDateTime start, LocalDateTime end, 
-			NonParametric sourceState, int timeLimit)
+	public ArrayList<ContMultiSample> performDATimeStep(LocalDateTime start, LocalDateTime end, 
+			ArrayList<ContMultiSample> sourceState, int timeLimit)
 	{		
 		LocalDateTime computationStart		= LocalDateTime.now();
 		candidateCount						= Math.max(ensembleSize, candidateCount);
@@ -693,7 +701,8 @@ public class OPTIMISTS
 												+ formatter.format(start);
 		
 		// Create assimilator and particle
-		Assimilator assimilator				= new Assimilator(sourceState);
+		assimilator							= new Assimilator(sourceState, distributionType,
+										scaling, silverman, dimLimit, corrThreshold, ggmCreator);
 		assimilator.setParticlesToGenerate(	candidateCount			);
 		assimilator.setParticlesToReturn(	ensembleSize			);
 		assimilator.setMaxEvaluation(		maxEvaluations			);
@@ -710,8 +719,7 @@ public class OPTIMISTS
 		assimilator.setMaestro(optimizer);
 		
 		// Perform data assimilation
-		NonParametric targetState			= assimilator.assimilate(timeLimit,	distributionType,
-										scaling, silverman, dimLimit, corrThreshold, ggmCreator);
+		ArrayList<ContMultiSample> targetState = assimilator.assimilate(timeLimit);
 		
 		// Write report files
 		try
@@ -768,10 +776,11 @@ public class OPTIMISTS
 	 * 						time step)
 	 * @param sourceState	Probability distribution of the initial or source state variables
 	 * @param timeLimit		Time limit for data assimilation in milliseconds
-	 * @return				The probability distribution of the final or target state variables
+	 * @return				The weighted samples that represent the probability distribution of the
+	 * 						final or target state variables
 	 */
-	public NonParametric performDataAssimilation(LocalDateTime start, LocalDateTime end,
-							Duration daTimeStep, NonParametric sourceState, long timeLimit)
+	public ArrayList<ContMultiSample> performDataAssimilation(LocalDateTime start,
+				LocalDateTime end, Duration daTimeStep, NonParametric sourceState, long timeLimit)
 	{
 		candidateCount						= Math.max(ensembleSize, candidateCount);
 		LocalDateTime current				= start;
@@ -782,7 +791,7 @@ public class OPTIMISTS
 		long stepStart						= 0;
 		int stepTimeLimit					= Integer.MAX_VALUE;
 		long compStart						= System.currentTimeMillis();
-		NonParametric currentState			= sourceState;
+		ArrayList<ContMultiSample> samples	= null;
 		while (!(current.isEqual(end) || current.isAfter(end)))
 		{
 			// Prepare time step parameters
@@ -797,11 +806,19 @@ public class OPTIMISTS
 			stepTimeLimit		= (int)(timeRemaining/(totalSteps - currentStep) - overTime);
 			
 			// Perform assimilation
-			currentState = performDATimeStep(current, timeStepEnd, currentState, stepTimeLimit);
+			samples				= performDATimeStep(current, timeStepEnd, samples, stepTimeLimit);
 			currentStep++;
 			current							= current.plus(daTimeStep);
 		}
-		return currentState;
+		return samples;
+	}
+	
+	/**
+	 * @return The probability distribution of the current source state variables 
+	 */
+	public NonParametric getCurrentSourceStateDist()
+	{
+		return assimilator != null ? assimilator.getSourceStateDist() : null;
 	}
 	
 	/**
@@ -867,11 +884,12 @@ public class OPTIMISTS
 	 * @param start			The date and time of the start of the step
 	 * @param optimizer		The instance of the optimizer which contains the population with the 
 	 * 						best particles
-	 * @param targetState	The resulting probability distribution of state variables
+	 * @param targetState	The weighted samples that represent the probability distribution of the
+	 * 						target state variables
 	 * @throws IOException	If there is a problem writing the files
 	 */
 	private void writeStepReport(LocalDateTime start, MAESTRO optimizer, 
-									NonParametric targetState) throws IOException
+									ArrayList<ContMultiSample> targetState) throws IOException
 	{
 		DateTimeFormatter formatter;
 		// Index solutions
@@ -892,7 +910,7 @@ public class OPTIMISTS
 		out.println(line);
 		
 		// Write particle list
-		for (ContMultiSample sample : targetState.getSamples())
+		for (ContMultiSample sample : targetState)
 		{
 			ParticleWrapper wrapper	= (ParticleWrapper) sample;
 			SolutionWrapper sol		= index.get(wrapper.getId());

@@ -32,7 +32,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Hashtable;
 import java.util.Scanner;
 
@@ -50,8 +49,6 @@ import maestro_mo.MAESTRO;
 import maestro_mo.gen.GA;
 import maestro_mo.gen.MetroACO;
 import optimists.OPTIMISTS;
-import probDist.multiVar.KD_GGMLite;
-import probDist.multiVar.MultiVarKernelDensity;
 import probDist.multiVar.NonParametric;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
@@ -98,6 +95,7 @@ public class IndiantownRun implements ModelConfigurator
 		boolean objMDist				= false;
 		boolean objMForce				= false;
 		boolean objMeanMForce			= true;
+		boolean objMeanMForceLOO		= true;
 		boolean obj2TermCost			= false;
 		
 		double obsError					= 50;
@@ -149,16 +147,12 @@ public class IndiantownRun implements ModelConfigurator
 		if (scenario == 1)
 		{
 			start						= LocalDateTime.of(2009, 7, 26,  0, 0);
-			//start						= LocalDateTime.of(2009, 7, 12,  0, 0);
-			//end						= LocalDateTime.of(2009, 7, 26,  6, 0);
 			end							= LocalDateTime.of(2009, 8,  9,  0, 0);
 			forecastEnd					= LocalDateTime.of(2009, 8, 23,  0, 0);
 		}
 		else if (scenario == 2)
 		{
 			start						= LocalDateTime.of(2009, 8, 26,  0, 0);
-			//start						= LocalDateTime.of(2009, 8, 12,  0, 0);
-			//end						= LocalDateTime.of(2009, 8, 26,  6, 0);
 			end							= LocalDateTime.of(2009, 9,  9,  0, 0);
 			forecastEnd					= LocalDateTime.of(2009, 9, 23,  0, 0);
 		}
@@ -178,8 +172,9 @@ public class IndiantownRun implements ModelConfigurator
 											defaultState.getOverStoryMask(input.mask), porosity);
 		String initStateFile			= inputDataFolder + "/states/scenario " + scenario 
 											+ "/states.txt";  
-		NonParametric initialState = createInitialState(initStateFile, variables, ensembleSize,
-						distributionType, scaling, silverman, dimLimit, ggmCreator, corrThreshold);
+		ArrayList<ContMultiSample> initialState = createInitialState(initStateFile, variables,
+												ensembleSize, distributionType, scaling, silverman,
+												dimLimit, ggmCreator, corrThreshold);
 		
 		Hashtable<LocalDateTime, Double> streamflowObs = loadDischargeObs(streamflowFile);
 		
@@ -190,7 +185,7 @@ public class IndiantownRun implements ModelConfigurator
 				modelTimeStep, input, layers, defaultSoils, defaultVegetations, defaultNetwork,
 				stations, optionsFile, areaFile, constantsFile, dhsvmExec, objQNSE, objQMAE,
 				objQMARE, objIndeppdf, objpdf, objLogpdf, objMDist, objMForce, objMeanMForce,
-				obj2TermCost, streamflowObs, obsError, bkgrMultiplier);
+				objMeanMForceLOO, obj2TermCost, streamflowObs, obsError, bkgrMultiplier);
 		assimilator.assimilate(problemName, runIndex, outputFolder, modelsFolder, keepModelFiles,
 				start, maestro, end, daTimeStep, defaultState, initialState, variables,
 				ensembleSize, candidateCount, populationSize, maxEvaluations, samplePercentage,
@@ -1014,7 +1009,7 @@ public class IndiantownRun implements ModelConfigurator
 		return variables;
 	}
 	
-	private static NonParametric createInitialState(String initStateFile,
+	private static ArrayList<ContMultiSample> createInitialState(String initStateFile,
 			ArrayList<ContVar> variables, int sampleCount, int distType, double scaling, 
 			boolean silverman, int dimLimit, GGMLiteCreator ggmCreator, double corrThreshold)
 				throws FileNotFoundException
@@ -1050,44 +1045,7 @@ public class IndiantownRun implements ModelConfigurator
 		}
 		scanner.close();
 		
-		// Create distribution
-		Collections.shuffle(samples);
-		int origSize						= samples.size();
-		for (int s = sampleCount; s < origSize; s++)
-			samples.remove(samples.size() - 1);
-		NonParametric dist					= null;
-		if (distType == OPTIMISTS.TYPE_D_KERNEL || distType == OPTIMISTS.TYPE_F_KERNEL)
-		{
-			dist							= new MultiVarKernelDensity();
-			dist.setWeighted(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_KERNEL)
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
-			}
-			else
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
-																		corrThreshold);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
-																		corrThreshold);
-			}
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			dist							= new KD_GGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((KD_GGMLite)dist).computeGaussianBW(scaling);
-			else
-				((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
-		}
-		return dist;
+		return samples;
 	}
 	
 	private ArrayList<Soil>			defaultSoils;

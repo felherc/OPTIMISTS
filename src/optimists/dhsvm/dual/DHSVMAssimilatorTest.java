@@ -56,17 +56,15 @@ import dhsvm.grid.State;
 import dhsvm.stream.StreamNetwork;
 import maestro_mo.ContVar;
 import maestro_mo.MAESTRO;
-import optimists.OPTIMISTS;
+import probDist.ContProbDist;
 import probDist.KernelDensity;
-import probDist.multiVar.EnsembleGGMLite;
-import probDist.multiVar.EnsembleNormal;
-import probDist.multiVar.KD_GGMLite;
-import probDist.multiVar.MultiVarKernelDensity;
-import probDist.multiVar.NonParametric;
+import probDist.Normal;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
 import probDist.multiVar.tools.Sample;
+import utilities.Utilities;
 import utilities.geom.Point2D;
+import utilities.stat.ContStats;
 
 /**
  * Citation: Hernández, F. and Liang, X.: Hybridizing Bayesian and variational data assimilation
@@ -87,7 +85,7 @@ public class DHSVMAssimilatorTest
 	public final static String MODELS_PREP_FOLDER	= "Preparation";
 	public final static String DA_FOLDER 			= "Data assimilation";
 	
-	public final static String STATE_FILE_DT_FORMAT	= "yyyyMMdd HH-mm";
+	public final static String STATE_FILE_DT_FORMAT	= "yyyyMMdd_HH-mm";
 	
 	public final static String OUT_FILE_STATS		= "Stats.txt";
 	public final static String OUT_FILE_Q_VALS		= "Q.txt";
@@ -96,6 +94,7 @@ public class DHSVMAssimilatorTest
 	public final static String OUT_FILE_SM_L2_VALS	= "SM2.txt";
 	public final static String OUT_FILE_SM_L3_VALS	= "SM3.txt";
 	public final static String OUT_FILE_WEIGHTS		= "W.txt";
+	public final static String OUT_FILE_PERF		= "Performance.txt";
 	
 	public final static int MAX_STATE_FILES			= 50;
 	
@@ -110,6 +109,8 @@ public class DHSVMAssimilatorTest
 	private Duration					modelTimeStep;
 	private Duration					daTimeStep;
 	
+	private Hashtable<LocalDateTime, Double> obsQ;
+	
 	private boolean						removeDAFiles;
 	private boolean						removeDAModelFiles;
 	private boolean						removeForecastFiles;
@@ -120,19 +121,15 @@ public class DHSVMAssimilatorTest
 	private String						outputFolder;
 	private DateTimeFormatter			formatter;
 	
-	private int							dimLimit;
-	private double						corrThreshold;
-	private int							distType;
-	private double						scaling;
-	private boolean						silverman;
-	private GGMLiteCreator				ggmCreator;
-	
 	private TreeSet<LocalDateTime>		stateList;					
 	private String						statesFolder;
 	private String						stateFileHeader;
 	
 	private ArrayList<Duration>			leadTimes;
 	private ArrayList<LocalDateTime>	progress;
+	
+	private long						totalDATime;
+	private long						totalModelingTime;
 	
 	private HashSet<String>				toDelete;
 	
@@ -146,14 +143,16 @@ public class DHSVMAssimilatorTest
 			ArrayList<MetStation> stations, String optionsFile, String areaFile,
 			String constantsFile, String dhsvmExec, boolean objQNSE, boolean objQMAE,
 			boolean objQMARE, boolean objIndeppdf, boolean objpdf, boolean objLogpdf,
-			boolean objMDist, boolean objMForce, boolean objMeanMForce, boolean obj2TermCost,
-			Hashtable<LocalDateTime, Double> obsQ, double obsError, double bkgrMultiplier,
-			boolean removeDAFiles, boolean removeDAModelFiles, boolean removeForecastFiles)
-					throws IOException
+			boolean objMDist, boolean objMForce, boolean objMeanMForce, boolean objMeanMForceLOO,
+			boolean obj2TermCost, Hashtable<LocalDateTime, Double> obsQ, double obsError,
+			double bkgrMultiplier, boolean removeDAFiles, boolean removeDAModelFiles,
+			boolean removeForecastFiles) throws IOException
 	{
 		this.configurator			= configurator;
 		this.defaultParameters		= defaultParameters;
 		this.modelTimeStep			= modelTimeStep;
+		
+		this.obsQ					= obsQ;
 		
 		this.removeDAFiles			= removeDAFiles;
 		this.removeDAModelFiles		= removeDAModelFiles;
@@ -162,8 +161,8 @@ public class DHSVMAssimilatorTest
 		assimilator					= new DHSVMAssimilator(configurator, defaultParameters,
 				modelTimeStep, input, layers, soils, vegetations, network, stations, optionsFile,
 				areaFile, constantsFile, dhsvmExec, objQNSE, objQMAE, objQMARE, objIndeppdf,
-				objpdf, objLogpdf, objMDist, objMForce, objMeanMForce, obj2TermCost, obsQ,
-				obsError, bkgrMultiplier);
+				objpdf, objLogpdf, objMDist, objMForce, objMeanMForce, objMeanMForceLOO,
+				obj2TermCost, obsQ, obsError, bkgrMultiplier);
 		
 		formatter					= DateTimeFormatter.ofPattern(STATE_FILE_DT_FORMAT);
 	}
@@ -175,10 +174,10 @@ public class DHSVMAssimilatorTest
 	public void testAssimilator(String testName, int runIndex, String outputFolder,
 			String modelsFolder, LocalDateTime forecastStart, LocalDateTime forecastEnd,
 			Duration daTimeStep, ArrayList<Duration> leadTimes, double leadTimeRange,
-			NonParametric baseState, LocalDateTime baseStateTime, ArrayList<ContVar> variables,
-			MAESTRO maestro, int ensembleSize, int candidateCount, int populationSize,
-			int maxEvaluations, double samplePercentage, double rootPercentage, int dimLimit,
-			double corrThreshold, int distType, double scaling, boolean silverman,
+			ArrayList<ContMultiSample> baseState, LocalDateTime baseStateTime,
+			ArrayList<ContVar> variables, MAESTRO maestro, int ensembleSize, int candidateCount,
+			int populationSize, int maxEvaluations, double samplePercentage, double rootPercentage,
+			int dimLimit, double corrThreshold, int distType, double scaling, boolean silverman,
 			GGMLiteCreator ggmCreator, boolean weightPerFront, double particleGreed,
 			int threadCount, boolean assimilatorReports, boolean maestroReports,
 			String hallOfFameFolder, long timeLimit, int maxDARetries) throws IOException
@@ -189,12 +188,8 @@ public class DHSVMAssimilatorTest
 		this.leadTimes						= leadTimes;
 		this.threadCount					= threadCount;
 		this.timeLimit						= timeLimit;
-		this.dimLimit						= dimLimit;
-		this.corrThreshold					= corrThreshold;
-		this.distType						= distType;
-		this.scaling						= scaling;
-		this.silverman						= silverman;
-		this.ggmCreator						= ggmCreator;
+		this.totalDATime					= 0;
+		this.totalModelingTime				= 0;
 		
 		toDelete							= new HashSet<>();
 		
@@ -344,10 +339,7 @@ public class DHSVMAssimilatorTest
 			LocalDateTime daEnd				= daStart.plus(daTimeStep);
 			
 			// Prepare assimilation
-			NonParametric initState			= getState(daStart);
-			
-			// TODO Remove flag
-			System.out.println("Samples in loaded state: " + initState.getSamples().size());
+			ArrayList<ContMultiSample> initState = getState(daStart);
 			
 			String strDT					= formatter.format(daEnd.plus(modelTimeStep));			
 			String daRunName				= testName + "_" + strDT;
@@ -361,17 +353,19 @@ public class DHSVMAssimilatorTest
 			}
 			Files.createDirectory(path);
 			Files.createDirectory(FileSystems.getDefault().getPath(modelsiFolder));
-			ModelConfiguration config		= configurator.configure(
-							initState.getSamples().get(0).getValues(), daStart, defaultParameters);
+			ModelConfiguration config		= configurator.configure(initState.get(0).getValues(),
+																		daStart, defaultParameters);
 			State exampleState				= config.initialState;
 			
 			// Assimilate and store target state
-			NonParametric targetState		= assimilator.assimilate(daRunName, runIndex, folder,
-					modelsiFolder, !removeDAModelFiles, daStart, maestro, daEnd, daTimeStep,
+			ArrayList<ContMultiSample> targetState = assimilator.assimilate(daRunName, runIndex,
+					folder, modelsiFolder, !removeDAModelFiles, daStart, maestro, daEnd, daTimeStep,
 					exampleState, initState, variables, ensembleSize, candidateCount,
 					populationSize, maxEvaluations, samplePercentage, rootPercentage, dimLimit,
 					distType, scaling, silverman, ggmCreator, weightPerFront, particleGreed,
 					threadCount, assimilatorReports, maestroReports, hallOfFameFolder, timeLimit);
+			totalDATime						+= assimilator.getTotalDATime();
+			totalModelingTime				+= assimilator.getTotalModelingTime();
 			writeStateToFile(daEnd, targetState);
 			
 			// Determine forecast times
@@ -480,6 +474,9 @@ public class DHSVMAssimilatorTest
 				}
 			done							= !keepRunning;
 		}
+
+		// Compute performance
+		computeForecastPerformance(leadTimes, forecastStart, forecastEnd);
 		
 		// Delete remaining folders
 		if (removeDAFiles)
@@ -494,27 +491,27 @@ public class DHSVMAssimilatorTest
 		System.out.println("\nFinished!");
 	}
 	
-	private NonParametric getState(LocalDateTime dateTime) throws IOException
+	private ArrayList<ContMultiSample> getState(LocalDateTime dateTime) throws IOException
 	{
-		String strDT				= formatter.format(dateTime);
+		String strDT					= formatter.format(dateTime);
 		
 		// Try loading initial state
-		DateTimeFormatter formatter	= DateTimeFormatter.ofPattern(STATE_FILE_DT_FORMAT);
-		String fileName				= statesFolder + "/" + formatter.format(dateTime) + ".txt";
+		DateTimeFormatter formatter		= DateTimeFormatter.ofPattern(STATE_FILE_DT_FORMAT);
+		String fileName					= statesFolder + "/" + formatter.format(dateTime) + ".txt";
 		if (Files.exists(FileSystems.getDefault().getPath(fileName)))
 		{
-			NonParametric state		= readStateFromFile(dateTime);
+			ArrayList<ContMultiSample> state = readStateFromFile(dateTime);
 			System.out.println("\nLoaded initial state (" + strDT + ")...");
 			return state;
 		}
 		
 		System.out.println("\nPreparing initial state for assimilation (" + strDT + ")...");
-		LocalDateTime baseDT		= stateList.lower(dateTime);
-		NonParametric baseState		= readStateFromFile(baseDT);
-		String folder				= modelsFolder + "/" + MODELS_PREP_FOLDER + "/" + strDT;
+		LocalDateTime baseDT			= stateList.lower(dateTime);
+		ArrayList<ContMultiSample> baseState	= readStateFromFile(baseDT);
+		String folder					= modelsFolder + "/" + MODELS_PREP_FOLDER + "/" + strDT;
 		Files.createDirectory(FileSystems.getDefault().getPath(folder));
 		assimilator.prepareForecast(baseState, baseDT, folder);
-		NonParametric state			= assimilator.forecast(dateTime, folder, threadCount, null,
+		ArrayList<ContMultiSample> state = assimilator.forecast(dateTime, folder, threadCount, null,
 													null, removeForecastFiles, timeLimit);
 		try
 		{
@@ -523,18 +520,15 @@ public class DHSVMAssimilatorTest
 		return state;
 	}
 	
-	private void writeStateToFile(LocalDateTime dateTime, NonParametric stateDistribution)
-					throws IOException
+	private void writeStateToFile(LocalDateTime dateTime,
+								ArrayList<ContMultiSample> stateDistribution) throws IOException
 	{
 		String fileName					= statesFolder + "/" + formatter.format(dateTime) + ".txt";
 		PrintWriter out	= new PrintWriter(new BufferedWriter(new FileWriter(fileName, false)));
 		out.println(stateFileHeader);
 		
-		// TODO Remove flag
-		System.out.println("Particles in state to save: " + stateDistribution.getSamples().size());
-		
 		int index						= 1;
-		for (ContMultiSample particle : stateDistribution.getSamples())
+		for (ContMultiSample particle : stateDistribution)
 		{
 			StringBuilder builder		= new StringBuilder(index + "\t" + particle.getWeight());
 			for (Double value : particle.getValues())
@@ -566,7 +560,8 @@ public class DHSVMAssimilatorTest
 		}
 	}
 	
-	private NonParametric readStateFromFile(LocalDateTime dateTime) throws FileNotFoundException
+	private ArrayList<ContMultiSample> readStateFromFile(LocalDateTime dateTime)
+											throws FileNotFoundException
 	{
 		DateTimeFormatter formatter	= DateTimeFormatter.ofPattern(STATE_FILE_DT_FORMAT);
 		String fileName				= statesFolder + "/" + formatter.format(dateTime) + ".txt";
@@ -587,58 +582,7 @@ public class DHSVMAssimilatorTest
 			samples.add(new Sample(weight, values));
 		}
 		scanner.close();
-		
-		// Create distribution
-		NonParametric dist			= null;
-		if (distType == OPTIMISTS.TYPE_D_NORMAL || distType == OPTIMISTS.TYPE_F_NORMAL)
-		{
-			dist					= new EnsembleNormal(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_NORMAL)
-				((EnsembleNormal)dist).computeDiagonalCovariance();
-			else
-				((EnsembleNormal)dist).computeCovariance(dimLimit, corrThreshold);
-		}
-		if (distType == OPTIMISTS.TYPE_D_KERNEL || distType == OPTIMISTS.TYPE_F_KERNEL)
-		{
-			dist					= new MultiVarKernelDensity(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_KERNEL)
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
-			}
-			else
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
-																		corrThreshold);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
-																		corrThreshold);
-			}
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			dist					= new EnsembleGGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((EnsembleGGMLite)dist).computeDependencies();
-			else
-				((EnsembleGGMLite)dist).computeDependencies(ggmCreator);
-		}
-		else if (distType == OPTIMISTS.TYPE_KD_GGM_LITE)
-		{
-			dist					= new KD_GGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((KD_GGMLite)dist).computeGaussianBW(scaling);
-			else
-				((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
-		}
-		return dist;
+		return samples;
 	}
 
 	private void storeResults(	ArrayList<ArrayList<LocalDateTime>> forcastTimes,
@@ -827,6 +771,117 @@ public class DHSVMAssimilatorTest
 			
 			progress.set(l, prog.plus(modelTimeStep));
 		}
+	}
+	
+	private void computeForecastPerformance(ArrayList<Duration> leadTimes,
+			LocalDateTime forecastStart, LocalDateTime forecastEnd) throws IOException
+	{
+		String summaryFile					= outputFolder + "/Performance.txt";
+		PrintWriter generalOut = new PrintWriter(new BufferedWriter(new FileWriter(summaryFile)));
+		double modTimePerThread				= ((double)totalModelingTime)/threadCount;
+		double modTimeFraction				= modTimePerThread/totalDATime;
+		
+		generalOut.println("Data assimilation:");
+		generalOut.println("Total assimilation time = "	+ totalDATime		+ " ms");
+		generalOut.println("Total modeling time = "		+ totalModelingTime	+ " ms");
+		generalOut.println("Modeling time per thread ("	+ threadCount		+ ") = " + modTimePerThread + " ms");
+		generalOut.println("Modeling time fraction = "	+ modTimeFraction);
+		generalOut.println("\nForecast performance:");
+		generalOut.println("Lead time\tNSE_l2\tNSE_l1\tMARE\tCRPS\tDensity\tNormalized density");
+		System.out.println("\nForecast performance:");
+		System.out.println("Lead time\tNSE_l2\tNSE_l1\tMARE\tCRPS\tDensity\tNormalized density\tModeling time percent");
+		for (Duration leadTime : leadTimes)
+		{
+			String ltStr					= leadTime.toString();
+			String ltFolder					= outputFolder + "/Lead time = " + ltStr;
+			String valuesFile				= ltFolder + "/" + OUT_FILE_Q_VALS;
+			String weightsFile				= ltFolder + "/" + OUT_FILE_WEIGHTS;
+			ArrayList<ContProbDist> series	= new ArrayList<>();
+			Scanner scannerV				= new Scanner(new FileInputStream(new File(valuesFile)));
+			Scanner scannerW				= new Scanner(new FileInputStream(new File(weightsFile)));
+			scannerV.nextLine();	// Header
+			scannerW.nextLine();	// Header
+			
+			// Load distribution time series from files
+			ArrayList<Double> meanQ			= new ArrayList<>();
+			ArrayList<Double> obs			= new ArrayList<>();
+			while (scannerV.hasNextLine())
+			{
+				String[] tokensV			= scannerV.nextLine().split("\t");
+				String[] tokensW			= scannerW.nextLine().split("\t");
+				
+				LocalDateTime dateTime		= LocalDateTime.parse(tokensV[0], formatter);
+				Double obsi					= obsQ.get(dateTime);
+				if (obsi != null 	&& dateTime.isAfter(	forecastStart	)
+									&& !dateTime.isAfter(	forecastEnd		))
+				{
+					KernelDensity dist			= new KernelDensity();
+					dist.setWeighted(true);
+					for (int v = 1; v < Math.min(tokensV.length, tokensW.length); v++)
+					{
+						double value			= Double.valueOf(tokensV[v]);
+						double weight			= Double.valueOf(tokensW[v]);
+						dist.addSample(value, weight);
+					}
+					if (dist.getSamples().size() == 0)
+					{
+						scannerV.close();
+						scannerW.close();
+						throw new RuntimeException("No forecasted values at time " + tokensV[0]);
+					}
+					dist.computeGaussianBandwidth();
+					series.add(dist);
+					meanQ.add(dist.getMean());
+					obs.add(obsi);
+				}
+			}
+			scannerV.close();
+			scannerW.close();
+			
+			// Compute density and CRPS
+			ContStats crps			= new ContStats(false);
+			ContStats density		= new ContStats(false);
+			ContStats normDens		= new ContStats(false);
+			for (int t = 0; t < obs.size(); t++)
+			{
+				double obsi			= obs.get(t);
+				ContProbDist dist	= series.get(t);
+				density.addValue(dist.getpdf(obsi));
+				double normVal		= (obsi - dist.getMean())/dist.getStDev();
+				normDens.addValue(Normal.computepdf(0.0, 1.0, normVal));
+				KernelDensity dist2	= (KernelDensity)dist;
+				crps.addValue(dist2.computeEnsembleCRPS(obsi));
+			}
+
+			// Compute performance
+			double[] obsArr			= Utilities.toArray(obs);
+			double[] modArr			= Utilities.toArray(meanQ);
+			double nse_l2			= Utilities.computeNashSutcliffe(obsArr, modArr);
+			double nse_l1			= Utilities.computeNashSutcliffe(obsArr, modArr, 1.0);
+			double mare				= Utilities.computeMeanAbsRelativeError(obsArr, modArr);
+			double meanCRPS			= crps.getMean();
+			double meanDensity		= density.getMean();
+			double meanNormDens		= normDens.getMean();
+
+			// Store performance file
+			String performanceFile	= ltFolder + "/" + OUT_FILE_PERF;
+			PrintWriter out = new PrintWriter(new BufferedWriter(new FileWriter(performanceFile)));
+			out.println("Values\t"				+ obsArr.length	);
+			out.println("NSE_l2\t"				+ nse_l2		);
+			out.println("NSE_l1\t"				+ nse_l1		);
+			out.println("MARE\t"				+ mare			);
+			out.println("Mean CRPS\t"			+ meanCRPS		);
+			out.println("Mean density\t"		+ meanDensity	);
+			out.println("Mean norm. dens.\t"	+ meanNormDens	);
+			out.close();
+			
+			// Print to file
+			String line				= ltStr + "\t" + nse_l2 + "\t" + nse_l1 + "\t" + mare + "\t"
+				+ meanCRPS + "\t" + meanDensity + "\t" + meanNormDens + "\t" + modTimeFraction;
+			generalOut.println(line);
+			System.out.println(line);
+		}
+		generalOut.close();
 	}
 	
 }

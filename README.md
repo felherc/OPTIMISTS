@@ -5,7 +5,7 @@ OPTIMISTS' implementation can be coupled with any model whose state variables ca
 
 Citation: Hern·ndez, F. and Liang, X.: Hybridizing Bayesian and variational data assimilation for high-resolution hydrologic forecasting, Hydrol. Earth Syst. Sci., 22, 5759-5779, https://doi.org/10.5194/hess-22-5759-2018, 2018. (Please cite this article if you use OPTIMISTS.)
 
-OPTIMISTS was developed at the University of Pittsburgh by Felipe Hern√°ndez under the supervision of Xu Liang, with funding from the U.S. Department of Transportation (award OASRTRS-14-H-PIT) and through the William Kepler Whiteford Professorship of the University of Pittsburgh.
+OPTIMISTS was developed at the University of Pittsburgh by Felipe Hern·ndez under the supervision of Xu Liang, with funding from the U.S. Department of Transportation (award OASRTRS-14-H-PIT) and through the William Kepler Whiteford Professorship of the University of Pittsburgh.
 
 Copyright 2018 University of Pittsburgh
 

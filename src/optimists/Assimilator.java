@@ -34,7 +34,6 @@ import maestro_mo.Monitor;
 import maestro_mo.Objective;
 import maestro_mo.gen.GenWrapper;
 import maestro_mo.gen.Generator;
-import maestro_mo.pop.Population;
 import maestro_mo.pop.groupMerge.Front;
 import maestro_mo.pop.groupMerge.GroupMergePopulation;
 import maestro_mo.solution.SolutionRoot;
@@ -209,7 +208,7 @@ public class Assimilator implements Monitor
 	private Boolean optimizationCompleted;
 	
 	// --------------------------------------------------------------------------------------------
-	// Constructor
+	// Constructors
 	// --------------------------------------------------------------------------------------------
 	
 	/**
@@ -232,10 +231,140 @@ public class Assimilator implements Monitor
 		this.optimizationCompleted	= false;
 	}
 	
+	/**
+	 * @param samples The weighted samples to generate the {@link #sourceStateDist} from
+	 */
+	
+	/**
+	 * Initializes the assimilator by creating a probability distribution for the source state
+	 * variables from a set of weighted samples
+	 * @param samples		The weighted samples to generate the {@link #sourceStateDist} from
+	 * @param type			Options for the type of the state probability distribution: 
+	 * 						{@link OPTIMISTS#TYPE_D_KERNEL}, {@link OPTIMISTS#TYPE_F_KERNEL}, or
+	 * 						{@link OPTIMISTS#TYPE_GGM_LITE}
+	 * @param scaling		The factor to scale the sample covariance matrix to produce the 
+	 * 						kernels' bandwidth matrix. {@link java.lang.Double#NaN} if either 
+	 * 						Silverman's or Scott's rule of thumb should be used instead.
+	 * @param silverman		<code>true</code> if the Silverman's rule should be used to determine
+	 * 						the scaling factor for the kernels' bandwidth matrix. 
+	 * 						<code>false</code> if the Scott's rule should be used instead.
+	 * @param dimLimit		The maximum size of the bandwidth matrix (for F-class kernels)
+	 * @param corrThreshold	(For F-class kernels) If the absolute value of any computed correlation
+	 * 						between state variables is smaller than this threshold, it is assigned
+	 * 						a value of zero. That is, use values larger than zero to impose
+	 * 						sparsity on the bandwidth matrix.
+	 * @param ggmCreator	(For KD-GGMLite) Creator containing the parameters for the GGM kernel
+	 * 						of the distribution. <code>null</code> for standard kernels or if 
+	 * 						default parameters should be used.
+	 */
+	public Assimilator(ArrayList<ContMultiSample> samples, int type, double scaling,
+			boolean silverman, int dimLimit, double corrThreshold, GGMLiteCreator ggmCreator)
+	{
+		this.sourceStateDist		= computeDistribution(samples, type, scaling, silverman,
+															dimLimit, corrThreshold, ggmCreator);
+		this.particlesToGenerate	= DEF_PARTICLES_TO_GENERATE;
+		this.particlesToReturn		= DEF_PARTICLES_TO_RETURN;
+		this.maxEvaluation			= DEF_MAX_EVALUATION;
+		this.samplePercentage		= DEF_SAMPLE_PERCENTAGE;
+		this.rootPercentage			= DEF_ROOT_PERCENTAGE;
+		this.weightingMode			= DEF_WEIGHTING_MODE;
+		this.particleGreed			= DEF_PARTICLE_GREED;
+		this.maestro				= null;
+		this.optimizationCompleted	= false;
+	}
+	
 	// --------------------------------------------------------------------------------------------
 	// Methods
 	// --------------------------------------------------------------------------------------------
 	
+	/**
+	 * Creates a kernel density probability distribution based on the provided samples
+	 * @param samples		The weighted samples to create the distribution from
+	 * @param type			Options for the type of the probability distribution: 
+	 * 						{@link OPTIMISTS#TYPE_D_KERNEL}, {@link OPTIMISTS#TYPE_F_KERNEL}, or
+	 * 						{@link OPTIMISTS#TYPE_GGM_LITE}
+	 * @param scaling		The factor to scale the sample covariance matrix to produce the 
+	 * 						kernels' bandwidth matrix. {@link java.lang.Double#NaN} if either 
+	 * 						Silverman's or Scott's rule of thumb should be used instead.
+	 * @param silverman		<code>true</code> if the Silverman's rule should be used to determine
+	 * 						the scaling factor for the kernels' bandwidth matrix. 
+	 * 						<code>false</code> if the Scott's rule should be used instead.
+	 * @param dimLimit		The maximum size of the bandwidth matrix (for F-class kernels)
+	 * @param corrThreshold	(For F-class kernels) If the absolute value of any computed correlation
+	 * 						is smaller than this threshold, it is assigned a value of zero. That 
+	 * 						is, use values larger than zero to impose sparsity on the bandwidth 
+	 * 						matrix.
+	 * @param ggmCreator	(For KD-GGMLite) Creator containing the parameters for the GGM kernel
+	 * 						of the distribution. <code>null</code> for standard kernels or if 
+	 * 						default parameters should be used. 
+	 * @return The probability distribution
+	 */
+	private NonParametric computeDistribution(ArrayList<ContMultiSample> samples, 
+			int type, double scaling, boolean silverman, int dimLimit, 
+			double corrThreshold, GGMLiteCreator ggmCreator)
+	{		
+		// Create distribution
+		NonParametric dist					= null;
+		if (type == OPTIMISTS.TYPE_D_NORMAL || type == OPTIMISTS.TYPE_F_NORMAL)
+		{
+			dist							= new EnsembleNormal(true);
+			dist.setSamples(samples);
+			if (type == OPTIMISTS.TYPE_D_NORMAL)
+				((EnsembleNormal)dist).computeDiagonalCovariance();
+			else
+				((EnsembleNormal)dist).computeCovariance(Integer.MAX_VALUE, 0.0);
+		}
+		else if (type == OPTIMISTS.TYPE_GGM_LITE)
+		{
+			dist							= new EnsembleGGMLite(true);
+			dist.setSamples(samples);
+			if (ggmCreator == null)
+				((EnsembleGGMLite)dist).computeDependencies();
+			else
+				((EnsembleGGMLite)dist).computeDependencies(ggmCreator);
+		}
+		else if (type == OPTIMISTS.TYPE_D_KERNEL || type == OPTIMISTS.TYPE_F_KERNEL)
+		{
+			dist							= new MultiVarKernelDensity();
+			dist.setWeighted(true);
+			dist.setSamples(samples);
+			if (type == OPTIMISTS.TYPE_D_KERNEL)
+			{
+				if (Double.isNaN(scaling))
+					((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
+				else
+					((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
+			}
+			else
+			{
+				if (Double.isNaN(scaling))
+					((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
+																	corrThreshold);
+				else
+					((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
+																		corrThreshold);
+			}
+		}
+		else if (type == OPTIMISTS.TYPE_KD_GGM_LITE)
+		{
+			dist							= new KD_GGMLite(true);
+			dist.setSamples(samples);
+			if (ggmCreator == null)
+				((KD_GGMLite)dist).computeGaussianBW(scaling);
+			else
+				((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
+		}
+		return dist;
+	}
+
+	/**
+	 * @return {@link #sourceStateDist}
+	 */
+	public NonParametric getSourceStateDist()
+	{
+		return sourceStateDist;
+	}
+
 	/**
 	 * @return {@link #particlesToGenerate}
 	 */
@@ -374,33 +503,15 @@ public class Assimilator implements Monitor
 
 	/**
 	 * Performs the data assimilation by generating a set of candidate particles, then organizing 
-	 * them using non-domination sorting, and then creating a kernel density probability 
-	 * distribution that represents the target state variables. The candidate particles are created
-	 * by drawing samples from the source probability distribution, randomly generating them from
-	 * the distribution, and by using the MAESTRO optimization algorithm.
-	 * @param timeLimit		The maximum time to perform the assimilation in milliseconds
-	 * @param type			Options for the type of the state probability distribution: 
-	 * 						{@link OPTIMISTS#TYPE_D_KERNEL}, {@link OPTIMISTS#TYPE_F_KERNEL}, or
-	 * 						{@link OPTIMISTS#TYPE_GGM_LITE}
-	 * @param scaling		The factor to scale the sample covariance matrix to produce the 
-	 * 						kernels' bandwidth matrix. {@link java.lang.Double#NaN} if either 
-	 * 						Silverman's or Scott's rule of thumb should be used instead.
-	 * @param silverman		<code>true</code> if the Silverman's rule should be used to determine
-	 * 						the scaling factor for the kernels' bandwidth matrix. 
-	 * 						<code>false</code> if the Scott's rule should be used instead.
-	 * @param dimLimit		The maximum size of the bandwidth matrix (for F-class kernels)
-	 * @param corrThreshold	(For F-class kernels) If the absolute value of any computed correlation
-	 * 						between state variables is smaller than this threshold, it is assigned
-	 * 						a value of zero. That is, use values larger than zero to impose
-	 * 						sparsity on the bandwidth matrix.
-	 * @param ggmCreator	(For KD-GGMLite) Creator containing the parameters for the GGM kernel
-	 * 						of the distribution. <code>null</code> for standard kernels or if 
-	 * 						default parameters should be used.
-	 * @return The resulting multivariate weighted kernel density probability distribution that
-	 * represents the variables of the final/target state
+	 * them using non-domination sorting, and then weighting them according to their resulting
+	 * rank. The candidate particles are created by drawing samples from the source probability
+	 * distribution, randomly generating them from the distribution, and by using the MAESTRO
+	 * optimization algorithm.
+	 * @param timeLimit The maximum time to perform the assimilation in milliseconds
+	 * @return The resulting weighted particles that represent the probability distribution of the
+	 * variables of the final/target state
 	 */
-	public NonParametric assimilate(long timeLimit, int type, double scaling,
-				boolean silverman, int dimLimit, double corrThreshold, GGMLiteCreator ggmCreator)
+	public ArrayList<ContMultiSample> assimilate(long timeLimit)
 	{
 		// Verify optimizer
 		if (maestro == null)
@@ -475,7 +586,7 @@ public class Assimilator implements Monitor
 		}
 		
 		// Verify if the population has enough particles
-		Population population				= maestro.getPopulation();
+		GroupMergePopulation population		= (GroupMergePopulation) maestro.getPopulation();
 		if (population.size() < particlesToReturn)
 		{
 			ArrayList<SolutionWrapper> all	= maestro.getAllSolutions();
@@ -506,98 +617,14 @@ public class Assimilator implements Monitor
 			((GroupMergePopulation) population).forceUpdate();
 		}
 		
-		// Create target distribution
-		return computeTargetDistribution((GroupMergePopulation) population, type, scaling,
-											silverman, dimLimit, corrThreshold, ggmCreator);
-	}
-	
-	/**
-	 * Creates a kernel density probability distribution based on the particles in the provided
-	 * population
-	 * @param population	The population containing the particles
-	 * @param type			Options for the type of the probability distribution: 
-	 * 						{@link OPTIMISTS#TYPE_D_KERNEL}, {@link OPTIMISTS#TYPE_F_KERNEL}, or
-	 * 						{@link OPTIMISTS#TYPE_GGM_LITE}
-	 * @param scaling		The factor to scale the sample covariance matrix to produce the 
-	 * 						kernels' bandwidth matrix. {@link java.lang.Double#NaN} if either 
-	 * 						Silverman's or Scott's rule of thumb should be used instead.
-	 * @param silverman		<code>true</code> if the Silverman's rule should be used to determine
-	 * 						the scaling factor for the kernels' bandwidth matrix. 
-	 * 						<code>false</code> if the Scott's rule should be used instead.
-	 * @param dimLimit		The maximum size of the bandwidth matrix (for F-class kernels)
-	 * @param corrThreshold	(For F-class kernels) If the absolute value of any computed correlation
-	 * 						is smaller than this threshold, it is assigned a value of zero. That 
-	 * 						is, use values larger than zero to impose sparsity on the bandwidth 
-	 * 						matrix.
-	 * @param ggmCreator	(For KD-GGMLite) Creator containing the parameters for the GGM kernel
-	 * 						of the distribution. <code>null</code> for standard kernels or if 
-	 * 						default parameters should be used. 
-	 * @return The kernel density probability distribution
-	 */
-	private NonParametric computeTargetDistribution(GroupMergePopulation population, 
-			int type, double scaling, boolean silverman, int dimLimit, 
-			double corrThreshold, GGMLiteCreator ggmCreator)
-	{
-		ArrayList<ContMultiSample> samples	= null;
+		// Assign weights to particles
 		if (weightingMode == OPTIMISTS.WEIGHT_MODE_FRONT)
 			samples							= assignWeightsFront(population, particleGreed);
 		else if (weightingMode == OPTIMISTS.WEIGHT_MODE_DOMINATION)
 			samples							= assignWeightsDomination(population, particleGreed);
 		else
 			throw new IllegalArgumentException(ERROR_INVALID_WEIGHTING_MODE);
-		
-		// Create distribution
-		NonParametric dist					= null;
-		if (type == OPTIMISTS.TYPE_D_NORMAL || type == OPTIMISTS.TYPE_F_NORMAL)
-		{
-			dist							= new EnsembleNormal(true);
-			dist.setSamples(samples);
-			if (type == OPTIMISTS.TYPE_D_NORMAL)
-				((EnsembleNormal)dist).computeDiagonalCovariance();
-			else
-				((EnsembleNormal)dist).computeCovariance(Integer.MAX_VALUE, 0.0);
-		}
-		else if (type == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			dist							= new EnsembleGGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((EnsembleGGMLite)dist).computeDependencies();
-			else
-				((EnsembleGGMLite)dist).computeDependencies(ggmCreator);
-		}
-		else if (type == OPTIMISTS.TYPE_D_KERNEL || type == OPTIMISTS.TYPE_F_KERNEL)
-		{
-			dist							= new MultiVarKernelDensity();
-			dist.setWeighted(true);
-			dist.setSamples(samples);
-			if (type == OPTIMISTS.TYPE_D_KERNEL)
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
-			}
-			else
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
-																	corrThreshold);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
-																		corrThreshold);
-			}
-		}
-		else if (type == OPTIMISTS.TYPE_KD_GGM_LITE)
-		{
-			dist							= new KD_GGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((KD_GGMLite)dist).computeGaussianBW(scaling);
-			else
-				((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
-		}
-		return dist;
+		return samples;
 	}
 
 	/**

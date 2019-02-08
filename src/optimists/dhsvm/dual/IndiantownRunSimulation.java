@@ -35,7 +35,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Hashtable;
 import java.util.Scanner;
 
@@ -51,10 +50,6 @@ import dhsvm.stream.StreamNetwork;
 import maestro_mo.ContVar;
 import optimists.OPTIMISTS;
 import probDist.KernelDensity;
-import probDist.multiVar.EnsembleGGMLite;
-import probDist.multiVar.EnsembleNormal;
-import probDist.multiVar.KD_GGMLite;
-import probDist.multiVar.MultiVarKernelDensity;
 import probDist.multiVar.NonParametric;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
@@ -127,8 +122,9 @@ public class IndiantownRunSimulation implements ModelConfigurator
 		State defaultState				= new State(baseStateTime, exampleState, rows, cols);
 		ArrayList<ContVar> variables	= getVariables(defaultState, input.mask,
 											defaultState.getOverStoryMask(input.mask), porosity);
-		NonParametric initialState = createInitialState(initStateFile, variables, ensembleSize,
-						distributionType, scaling, silverman, dimLimit, ggmCreator, corrThreshold);
+		ArrayList<ContMultiSample> initialState = createInitialState(initStateFile, variables,
+												ensembleSize, distributionType, scaling, silverman,
+												dimLimit, ggmCreator, corrThreshold);
 				
 		// Configure default parameterization
 		ArrayList<Soil> defaultSoils	= defaultSoils();
@@ -138,7 +134,7 @@ public class IndiantownRunSimulation implements ModelConfigurator
 		IndiantownRunSimulation configurator = new IndiantownRunSimulation(defaultSoils, 
 				defaultVegetations, defaultNetwork, input.soil, input.mask,
 				defaultState.getOSMask(input.mask), layers, defaultNetwork.getStreamIDs());
-		ArrayList<Double> values		= initialState.getSamples().get(defParamIndex).getValues();
+		ArrayList<Double> values		= initialState.get(defParamIndex).getValues();
 		ModelConfiguration defConfig	= configurator.configure(values, start, false);
 		configurator.defaultSoils		= defConfig.soils;
 		configurator.defaultVegetations	= defConfig.vegetations;
@@ -149,7 +145,7 @@ public class IndiantownRunSimulation implements ModelConfigurator
 		DHSVMAssimilator assimilator	= new DHSVMAssimilator(configurator, useDefaultParams, 
 				modelTimeStep, input, layers, defaultSoils, defaultVegetations, defaultNetwork,
 				stations, optionsFile, areaFile, constantsFile, dhsvmExec, false, false, false,
-				false, false, false, false, false, false, false, streamflowObs, Double.NaN,
+				false, false, false, false, false, false, false, false, streamflowObs, Double.NaN,
 				Double.NaN);
 		
 		assimilator.prepareForecast(initialState, start, outputFolder);
@@ -949,7 +945,7 @@ public class IndiantownRunSimulation implements ModelConfigurator
 		return variables;
 	}
 	
-	private static NonParametric createInitialState(String initStateFile,
+	private static ArrayList<ContMultiSample> createInitialState(String initStateFile,
 			ArrayList<ContVar> variables, int sampleCount, int distType, double scaling, 
 			boolean silverman, int dimLimit, GGMLiteCreator ggmCreator, double corrThreshold)
 				throws FileNotFoundException
@@ -985,63 +981,7 @@ public class IndiantownRunSimulation implements ModelConfigurator
 		}
 		scanner.close();
 		
-		// Create distribution
-		Collections.shuffle(samples);
-		int origSize						= samples.size();
-		for (int s = sampleCount; s < origSize; s++)
-			samples.remove(samples.size() - 1);
-		NonParametric dist					= null;
-		
-		if (distType == OPTIMISTS.TYPE_D_NORMAL || distType == OPTIMISTS.TYPE_F_NORMAL)
-		{
-			dist							= new EnsembleNormal(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_NORMAL)
-				((EnsembleNormal)dist).computeDiagonalCovariance();
-			else
-				((EnsembleNormal)dist).computeCovariance(Integer.MAX_VALUE, 0.0);
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			dist							= new EnsembleGGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((EnsembleGGMLite)dist).computeDependencies();
-			else
-				((EnsembleGGMLite)dist).computeDependencies(ggmCreator);
-		}
-		else if (distType == OPTIMISTS.TYPE_D_KERNEL || distType == OPTIMISTS.TYPE_F_KERNEL)
-		{
-			dist							= new MultiVarKernelDensity();
-			dist.setWeighted(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_KERNEL)
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
-			}
-			else
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
-																		corrThreshold);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
-																		corrThreshold);
-			}
-		}
-		else if (distType == OPTIMISTS.TYPE_KD_GGM_LITE)
-		{
-			dist							= new KD_GGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((KD_GGMLite)dist).computeGaussianBW(scaling);
-			else
-				((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
-		}
-		return dist;
+		return samples;
 	}
 	
 	public ArrayList<Soil>			defaultSoils;
@@ -1184,7 +1124,7 @@ public class IndiantownRunSimulation implements ModelConfigurator
 	@Override
 	public NonParametric createDistribution(ArrayList<ContMultiSample> samples)
 	{
-		// TODO Auto-generated method stub
+		// Do nothing
 		return null;
 	}
 

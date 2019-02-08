@@ -31,7 +31,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.HashSet;
 import java.util.Hashtable;
 import java.util.Scanner;
@@ -41,7 +40,6 @@ import maestro_mo.MAESTRO;
 import maestro_mo.gen.GA;
 import maestro_mo.gen.MetroACO;
 import optimists.OPTIMISTS;
-import probDist.multiVar.NonParametric;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
 import probDist.multiVar.tools.Sample;
@@ -186,7 +184,7 @@ public class BlueRiverTest
 		BlueRiver configurator			= new BlueRiver(soils, network, exampleState,
 												directFractions, dimLimit, corrThreshold,
 												distType, scaling, silverman, ggmCreator);
-		NonParametric baseState 		= createInitialState(initStateFile, variables,
+		ArrayList<ContMultiSample> baseState = createInitialState(initStateFile, variables,
 												ensembleSize, distType, scaling, silverman,
 												dimLimit, ggmCreator, corrThreshold, configurator);
 		
@@ -268,7 +266,7 @@ public class BlueRiverTest
 		return variables;
 	}
 	
-	private static NonParametric createInitialState(String initStateFile,
+	private static ArrayList<ContMultiSample> createInitialState(String initStateFile,
 				ArrayList<ContVar> variables, int sampleCount, int distType, double scaling, 
 				boolean silverman, int dimLimit, GGMLiteCreator ggmCreator, double corrThreshold,
 				ModelConfigurator configurator) throws FileNotFoundException
@@ -304,12 +302,7 @@ public class BlueRiverTest
 		}
 		scanner.close();
 		
-		// Create distribution
-		Collections.shuffle(samples);
-		int origSize						= samples.size();
-		for (int s = sampleCount; s < origSize; s++)
-			samples.remove(samples.size() - 1);
-		return configurator.createDistribution(samples);
+		return samples;
 	}
 
 	private static Hashtable<LocalDateTime, Double> loadObsHydrograph(String fileRoute, 

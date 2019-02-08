@@ -32,7 +32,6 @@ import java.time.Duration;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Hashtable;
 import java.util.Scanner;
 
@@ -110,7 +109,8 @@ public class IndiantownRunTest implements ModelConfigurator
 		boolean objLogpdf				= false;
 		boolean objMDist				= false;
 		boolean objMForce				= false;
-		boolean objMeanMForce			= true;
+		boolean objMeanMForce			= false;
+		boolean objMeanMForceLOO		= true;
 		boolean obj2TermCost			= false;
 		
 		double obsError					= 50;
@@ -180,7 +180,7 @@ public class IndiantownRunTest implements ModelConfigurator
 		ArrayList<ContVar> variables	= getVariables(defaultState, input.mask,
 											defaultState.getOverStoryMask(input.mask), porosity);
 		String initStateFile		= inputDataFolder + "/states/scenario 1/states (22 soils).txt";
-		NonParametric baseState = createInitialState(initStateFile, variables, ensembleSize,
+		ArrayList<ContMultiSample> baseState = createInitialState(initStateFile, variables, ensembleSize,
 								distType, scaling, silverman, dimLimit, ggmCreator, corrThreshold);
 		
 		// Configure default parameterization
@@ -192,7 +192,7 @@ public class IndiantownRunTest implements ModelConfigurator
 				defaultVegetations, defaultNetwork, input.soil, input.mask,
 				defaultState.getOSMask(input.mask), layers, defaultNetwork.getStreamIDs(),
 				distType, scaling, silverman, dimLimit, ggmCreator, corrThreshold);
-		ArrayList<Double> values		= baseState.getSamples().get(defParamIndex).getValues();
+		ArrayList<Double> values		= baseState.get(defParamIndex).getValues();
 		ModelConfiguration defConfig	= configurator.configure(values, baseStateTime, false);
 		configurator.defaultSoils		= defConfig.soils;
 		configurator.defaultVegetations	= defConfig.vegetations;
@@ -202,12 +202,13 @@ public class IndiantownRunTest implements ModelConfigurator
 		
 		try
 		{
-			DHSVMAssimilatorTest test		= new DHSVMAssimilatorTest(configurator, defaultParameters,
-					modelTimeStep, input, layers, configurator.defaultSoils,
-					configurator.defaultVegetations, configurator.defaultNetwork, stations, optionsFile,
-					areaFile, constantsFile, dhsvmExec, objQNSE, objQMAE, objQMARE, objIndeppdf,
-					objpdf, objLogpdf, objMDist, objMForce, objMeanMForce, obj2TermCost, streamflowObs,
-					obsError, bkgrMultiplier, removeDAFiles, removeDAModelFiles, removeForecastFiles);
+			DHSVMAssimilatorTest test		= new DHSVMAssimilatorTest(configurator,
+					defaultParameters, modelTimeStep, input, layers, configurator.defaultSoils,
+					configurator.defaultVegetations, configurator.defaultNetwork, stations,
+					optionsFile, areaFile, constantsFile, dhsvmExec, objQNSE, objQMAE, objQMARE,
+					objIndeppdf, objpdf, objLogpdf, objMDist, objMForce, objMeanMForce,
+					objMeanMForceLOO, obj2TermCost, streamflowObs, obsError, bkgrMultiplier,
+					removeDAFiles, removeDAModelFiles, removeForecastFiles);
 			test.testAssimilator(testName, runIndex, outputFolder, modelsFolder, forecastStart,
 					forecastEnd, daTimeStep, leadTimes, leadTimeRange, baseState, baseStateTime,
 					variables, maestro, ensembleSize, candidateCount, populationSize, maxEvaluations,
@@ -984,7 +985,7 @@ public class IndiantownRunTest implements ModelConfigurator
 		return variables;
 	}
 	
-	private static NonParametric createInitialState(String initStateFile,
+	private static ArrayList<ContMultiSample> createInitialState(String initStateFile,
 			ArrayList<ContVar> variables, int sampleCount, int distType, double scaling, 
 			boolean silverman, int dimLimit, GGMLiteCreator ggmCreator, double corrThreshold)
 				throws FileNotFoundException
@@ -1020,68 +1021,7 @@ public class IndiantownRunTest implements ModelConfigurator
 		}
 		scanner.close();
 		
-		// Create distribution
-		Collections.shuffle(samples);
-		int origSize						= samples.size();
-		for (int s = sampleCount; s < origSize; s++)
-			samples.remove(samples.size() - 1);
-		NonParametric dist					= null;
-		
-		if (distType == OPTIMISTS.TYPE_D_NORMAL || distType == OPTIMISTS.TYPE_F_NORMAL)
-		{
-			dist							= new EnsembleNormal(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_NORMAL)
-				((EnsembleNormal)dist).computeDiagonalCovariance();
-			else
-				((EnsembleNormal)dist).computeCovariance(Integer.MAX_VALUE, 0.0);
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			dist							= new EnsembleGGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((EnsembleGGMLite)dist).computeDependencies();
-			else
-				((EnsembleGGMLite)dist).computeDependencies(ggmCreator);
-		}
-		else if (distType == OPTIMISTS.TYPE_D_KERNEL || distType == OPTIMISTS.TYPE_F_KERNEL)
-		{
-			dist							= new MultiVarKernelDensity();
-			dist.setWeighted(true);
-			dist.setSamples(samples);
-			if (distType == OPTIMISTS.TYPE_D_KERNEL)
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(silverman);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianDiagBW(scaling);
-			}
-			else
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)dist).computeGaussianBW(silverman, dimLimit,
-																		corrThreshold);
-				else
-					((MultiVarKernelDensity)dist).computeGaussianBW(scaling, dimLimit,
-																		corrThreshold);
-			}
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			dist				= new EnsembleGGMLite(true);
-			dist.setSamples(samples);
-		}
-		else if (distType == OPTIMISTS.TYPE_KD_GGM_LITE)
-		{
-			dist				= new KD_GGMLite(true);
-			dist.setSamples(samples);
-			if (ggmCreator == null)
-				((KD_GGMLite)dist).computeGaussianBW(scaling);
-			else
-				((KD_GGMLite)dist).computeGaussianBW(scaling, ggmCreator);
-		}
-		return dist;
+		return samples;
 	}
 	
 	public ArrayList<Soil>			defaultSoils;

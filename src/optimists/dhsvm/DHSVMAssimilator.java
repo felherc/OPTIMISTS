@@ -59,10 +59,6 @@ import maestro_mo.Objective;
 import optimists.OPTIMISTS;
 import optimists.ParticleWrapper;
 import probDist.KernelDensity;
-import probDist.multiVar.EnsembleGGMLite;
-import probDist.multiVar.EnsembleNormal;
-import probDist.multiVar.KD_GGMLite;
-import probDist.multiVar.MultiVarKernelDensity;
 import probDist.multiVar.NonParametric;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
@@ -116,6 +112,8 @@ public class DHSVMAssimilator implements Executor
 	// Attributes
 	// --------------------------------------------------------------------------------------------
 	
+	private OPTIMISTS							assimilator;
+	
 	private DHSVMModel							model;
 	
 	private Duration							modelTimeStep;
@@ -135,7 +133,7 @@ public class DHSVMAssimilator implements Executor
 	private double								obsError;
 	private double								bkgrMultiplier;
 	
-	private NonParametric						currentState;
+	private ArrayList<ContMultiSample>			currentState;
 	
 	private String 								meanQFile;
 	private LocalDateTime						forecastEnd;
@@ -280,58 +278,9 @@ public class DHSVMAssimilator implements Executor
 		String maestroReportFolder		= maestroReports ? outputFolder + "/MAESTRO reports" : "";
 		
 		// Create initial state distribution
-		NonParametric initialState		= null;
-		if (distType == OPTIMISTS.TYPE_D_NORMAL || distType == OPTIMISTS.TYPE_F_NORMAL)
-		{
-			initialState							= new EnsembleNormal(true);
-			for (State state : initialStates)
-				initialState.addSample(new Sample(1.0, state.toArray(input.mask, osMask)));
-			if (distType == OPTIMISTS.TYPE_D_NORMAL)
-				((EnsembleNormal)initialState).computeDiagonalCovariance();
-			else
-				((EnsembleNormal)initialState).computeCovariance(Integer.MAX_VALUE, 0.0);
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			initialState							= new EnsembleGGMLite(true);
-			for (State state : initialStates)
-				initialState.addSample(new Sample(1.0, state.toArray(input.mask, osMask)));
-			if (ggmCreator == null)
-				((EnsembleGGMLite)initialState).computeDependencies();
-			else
-				((EnsembleGGMLite)initialState).computeDependencies(ggmCreator);
-		}
-		if (distType == OPTIMISTS.TYPE_D_KERNEL || distType == OPTIMISTS.TYPE_F_KERNEL)
-		{
-			initialState				= new MultiVarKernelDensity();
-			initialState.setWeighted(true);
-			for (State state : initialStates)
-				initialState.addSample(new Sample(1.0, state.toArray(input.mask, osMask)));
-			if (distType == OPTIMISTS.TYPE_D_KERNEL)
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)initialState).computeGaussianDiagBW(silverman);
-				else
-					((MultiVarKernelDensity)initialState).computeGaussianDiagBW(scaling);
-			}
-			else
-			{
-				if (Double.isNaN(scaling))
-					((MultiVarKernelDensity)initialState).computeGaussianBW(silverman);
-				else
-					((MultiVarKernelDensity)initialState).computeGaussianBW(scaling);
-			}
-		}
-		else if (distType == OPTIMISTS.TYPE_GGM_LITE)
-		{
-			initialState				= new KD_GGMLite(true);
-			for (State state : initialStates)
-				initialState.addSample(new Sample(1.0, state.toArray(input.mask, osMask)));
-			if (ggmCreator == null)
-				((KD_GGMLite)initialState).computeGaussianBW(scaling);
-			else
-				((KD_GGMLite)initialState).computeGaussianBW(scaling, ggmCreator);
-		}
+		ArrayList<ContMultiSample> initialState = new ArrayList<>(initialStates.size());
+		for (State state : initialStates)
+			initialState.add(new Sample(1.0, state.toArray(input.mask, osMask)));
 		
 		// Create assimilator and parameterize
 		OPTIMISTS assimilator	= new OPTIMISTS(problemName, runIndex, defaultParticle, variables, 
@@ -380,8 +329,8 @@ public class DHSVMAssimilator implements Executor
 			stepTimeLimit		= (int)(timeRemaining/(totalSteps - currentStep) - overTime);
 			
 			// Perform assimilation
-			NonParametric newState	= new MultiVarKernelDensity();
-			while (newState.getSamples().size() == 0)
+			ArrayList<ContMultiSample> newState	= new ArrayList<>();
+			while (newState.size() == 0)
 				newState					= assimilator.performDATimeStep(current, timeStepEnd, 
 												currentState, stepTimeLimit);
 			currentState					= newState;
@@ -443,7 +392,7 @@ public class DHSVMAssimilator implements Executor
 	}
 
 	private void writeMeanStreamflow(Duration daTimeStep, String meanQFile, LocalDateTime current, 
-										NonParametric currentState) throws IOException
+										ArrayList<ContMultiSample> currentState) throws IOException
 	{
 		PrintWriter out;
 		DateTimeFormatter formatter;
@@ -451,9 +400,9 @@ public class DHSVMAssimilator implements Executor
 		int modelTimeSteps				= (int) daTimeStep.toHours();
 		for (int t = 0; t < modelTimeSteps; t++)
 			qStats.add(new ContSeries(true));
-		for (int s = 0; s < currentState.getSamples().size(); s++)
+		for (int s = 0; s < currentState.size(); s++)
 		{
-			ContMultiSample sample		= currentState.getSamples().get(s);
+			ContMultiSample sample		= currentState.get(s);
 			ParticleWrapper wrapper		= (ParticleWrapper) sample;
 			DHSVMParticle particle		= (DHSVMParticle) wrapper.getParticle();
 			ArrayList<Double> q			= particle.getStreamflow();
@@ -595,28 +544,29 @@ public class DHSVMAssimilator implements Executor
 			boolean ok						= true;
 			double fitVal					= Double.NaN;
 			double[] source					= Utilities.toArray(sourceStateArray);
+			NonParametric sourceDist		= assimilator.getCurrentSourceStateDist();
 			try
 			{
 				if (objID.equals(OBJ_ID_Q_NSE) || objID.equals(OBJ_ID_Q_MAE) 
 						|| objID.equals(OBJ_ID_Q_MARE			))
 					fitVal					= getFitnessQ(modeledQ, objID);
 				else if (objID.equals(OBJ_ID_INDEP_PDF			))
-					fitVal					= currentState.getMeanIndeppdf(				source);
+					fitVal					= sourceDist.getMeanIndeppdf(				source);
 				else if (objID.equals(OBJ_ID_PDF				))
-					fitVal					= currentState.getpdf(						source);
+					fitVal					= sourceDist.getpdf(						source);
 				else if (objID.equals(OBJ_ID_LOG_PDF			))
-					fitVal					= currentState.getLogpdf(					source);
+					fitVal					= sourceDist.getLogpdf(						source);
 				else if (objID.equals(OBJ_ID_MAHALANOBIS_DIST	))
-					fitVal					= currentState.getMeanMahalanobisDistance(	source);
+					fitVal					= sourceDist.getMeanMahalanobisDistance(	source);
 				else if (objID.equals(OBJ_ID_MAHALANOBIS_FORCE	))
-					fitVal					= currentState.getMahalanobisForce(			source);
+					fitVal					= sourceDist.getMahalanobisForce(			source);
 				else if (objID.equals(OBJ_ID_MEAN_MAHAL_FORCE	))
-					fitVal					= currentState.getMeanMahalanobisForce(		source);
+					fitVal					= sourceDist.getMeanMahalanobisForce(		source);
 				else if (objID.equals(OBJ_ID_2_TERM_COST))
 				{
 					double obsCost			= getFitnessQ(modeledQ, objID);
 					double[] ssArr			= Utilities.toArray(sourceStateArray);
-					double distances[]	 	= currentState.getMahalanobisDistanceToSamples(ssArr);
+					double distances[]	 	= sourceDist.getMahalanobisDistanceToSamples(ssArr);
 					double bkgrCost			= 0.0;
 					for (int d = 0; d < distances.length; d++)
 						bkgrCost			+= distances[d];
@@ -755,7 +705,7 @@ public class DHSVMAssimilator implements Executor
 			createModelsFolders(folder);
 		
 		// Prepare mean streamflow
-		ParticleWrapper particle	= (ParticleWrapper) currentState.getSamples().get(0);
+		ParticleWrapper particle	= (ParticleWrapper) currentState.get(0);
 		LocalDateTime forecastStart	= particle.getEnd().plus(modelTimeStep);
 		LocalDateTime current		= forecastStart;
 		meanForecastQ				= new Hashtable<>();
@@ -766,10 +716,10 @@ public class DHSVMAssimilator implements Executor
 		}
 		
 		// Populate forecast queue
-		int sampleCount				= currentState.getSamples().size();
+		int sampleCount				= currentState.size();
 		Files.createDirectory(FileSystems.getDefault().getPath(folder + "/Forecasts"));
 		forecastQueue				= new ArrayBlockingQueue<>(sampleCount);
-		for (ContMultiSample sample : currentState.getSamples())
+		for (ContMultiSample sample : currentState)
 			forecastQueue.offer(sample);
 		
 		// Launch threads
@@ -864,7 +814,7 @@ public class DHSVMAssimilator implements Executor
 		out						= new PrintWriter(new BufferedWriter(new FileWriter(file, false)));
 		out.println("Model\tWeight\tDischarge (l/s)");
 		ArrayList<PointSD> sorter = new ArrayList<>();
-		for (ContMultiSample sample : currentState.getSamples())
+		for (ContMultiSample sample : currentState)
 			sorter.add(new PointSD(((ParticleWrapper) sample).getId(), sample.getWeight(), false));
 		Collections.sort(sorter);
 		for (int p = sorter.size() - 1; p >= 0; p--)

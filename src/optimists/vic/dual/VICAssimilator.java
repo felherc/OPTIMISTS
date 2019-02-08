@@ -107,6 +107,8 @@ public class VICAssimilator implements Executor
 	// Attributes
 	// --------------------------------------------------------------------------------------------
 	
+	private OPTIMISTS							assimilator;
+	
 	private String								parametersFolder;
 	private ArrayList<String>					globalFileParams;
 	private Duration							modelTimeStep;
@@ -126,7 +128,7 @@ public class VICAssimilator implements Executor
 	private ModelConfigurator					configurator;
 	
 	private String								modelsFolder;
-	private NonParametric						currentState;
+	private ArrayList<ContMultiSample>			currentState;
 	private LocalDateTime						simulating;
 	
 	private HashSet<String>						toDelete;
@@ -158,6 +160,7 @@ public class VICAssimilator implements Executor
 			boolean objpdf, boolean objLogpdf, boolean objMDist, boolean objMForce,
 			boolean objMeanMForce) throws IOException
 	{
+		this.assimilator			= null;
 		this.parametersFolder		= parameterFolder;
 		this.configurator			= configurator;
 		this.globalFileParams		= globalFileParams;
@@ -200,15 +203,15 @@ public class VICAssimilator implements Executor
 	// Methods
 	// --------------------------------------------------------------------------------------------
 
-	public NonParametric assimilate(String problemName, int runIndex, String outputFolder, 
-			String modelsFolder, LocalDateTime start, LocalDateTime end, Duration daTimeStep, 
-			NonParametric initialState, ArrayList<ContVar> variables, MAESTRO maestro,
-			int ensembleSize, int candidateCount, int populationSize, int maxEvaluations, 
-			double samplePercentage, double rootPercentage, int dimLimit, double corrThreshold,
-			int distType, double scaling, boolean silverman, GGMLiteCreator ggmCreator,
-			boolean weightPerFront, double particleGreed, int threadCount,
-			boolean assimilatorReports, boolean maestroReports, boolean storeTimeSeries,
-			String hallOfFameFolder, long timeLimit) throws IOException
+	public ArrayList<ContMultiSample> assimilate(String problemName, int runIndex,
+			String outputFolder, String modelsFolder, LocalDateTime start, LocalDateTime end,
+			Duration daTimeStep, ArrayList<ContMultiSample> initialState,
+			ArrayList<ContVar> variables, MAESTRO maestro, int ensembleSize, int candidateCount,
+			int populationSize, int maxEvaluations, double samplePercentage, double rootPercentage,
+			int dimLimit, double corrThreshold, int distType, double scaling, boolean silverman,
+			GGMLiteCreator ggmCreator, boolean weightPerFront, double particleGreed,
+			int threadCount, boolean assimilatorReports, boolean maestroReports,
+			boolean storeTimeSeries, String hallOfFameFolder, long timeLimit) throws IOException
 	{
 		// TODO Remove flag
 		System.out.println("\nStarting assimilation...");
@@ -242,7 +245,7 @@ public class VICAssimilator implements Executor
 		// Create assimilator and parameterize
 		int weightingMode				= weightPerFront	? OPTIMISTS.WEIGHT_MODE_FRONT
 															: OPTIMISTS.WEIGHT_MODE_DOMINATION;
-		OPTIMISTS assimilator			= new OPTIMISTS(problemName, runIndex, defaultParticle, 
+		assimilator						= new OPTIMISTS(problemName, runIndex, defaultParticle, 
 												variables, objectives, reportFile, reportFolder, 
 												maestroReportFolder, hallOfFameFolder);
 		if (maestro != null)
@@ -372,16 +375,16 @@ public class VICAssimilator implements Executor
 	}
 	
 	private void writeMeanStreamflow(int modelTimeSteps, String meanQFile, LocalDateTime current, 
-										NonParametric currentState) throws IOException
+										ArrayList<ContMultiSample> currentState) throws IOException
 	{
 		PrintWriter out;
 		DateTimeFormatter formatter;
 		ArrayList<ContSeries> qStats	= new ArrayList<>();
 		for (int t = 0; t < modelTimeSteps; t++)
 			qStats.add(new ContSeries(true));
-		for (int s = 0; s < currentState.getSamples().size(); s++)
+		for (int s = 0; s < currentState.size(); s++)
 		{
-			ContMultiSample sample		= currentState.getSamples().get(s);
+			ContMultiSample sample		= currentState.get(s);
 			ParticleWrapper wrapper		= (ParticleWrapper) sample;
 			VICParticle particle		= (VICParticle) wrapper.getParticle();
 			ArrayList<Double> q			= particle.getStreamflow();			
@@ -563,23 +566,24 @@ public class VICAssimilator implements Executor
 			boolean ok						= true;
 			double fitVal					= Double.NaN;
 			double[] source					= Utilities.toArray(initialArray);
+			NonParametric sourceState		= assimilator.getCurrentSourceStateDist();
 			try
 			{
 				if (objID.equals(OBJ_ID_Q_NSE) || objID.equals(OBJ_ID_Q_MAE) 
 						|| objID.equals(OBJ_ID_Q_MARE			))
 					fitVal					= getFitnessQ(streamflow, start, objID);
 				else if (objID.equals(OBJ_ID_INDEP_PDF			))
-					fitVal					= currentState.getMeanIndeppdf(				source);
+					fitVal					= sourceState.getMeanIndeppdf(				source);
 				else if (objID.equals(OBJ_ID_PDF				))
-					fitVal					= currentState.getpdf(						source);
+					fitVal					= sourceState.getpdf(						source);
 				else if (objID.equals(OBJ_ID_LOG_PDF			))
-					fitVal					= currentState.getLogpdf(					source);
+					fitVal					= sourceState.getLogpdf(					source);
 				else if (objID.equals(OBJ_ID_MAHALANOBIS_DIST	))
-					fitVal					= currentState.getMeanMahalanobisDistance(	source);
+					fitVal					= sourceState.getMeanMahalanobisDistance(	source);
 				else if (objID.equals(OBJ_ID_MAHALANOBIS_FORCE	))
-					fitVal					= currentState.getMahalanobisForce(			source);
+					fitVal					= sourceState.getMahalanobisForce(			source);
 				else if (objID.equals(OBJ_ID_MEAN_MAHAL_FORCE	))
-					fitVal					= currentState.getMeanMahalanobisForce(		source);
+					fitVal					= sourceState.getMeanMahalanobisForce(		source);
 				
 				if (Double.isNaN(fitVal))
 					ok					= false;
@@ -650,12 +654,12 @@ public class VICAssimilator implements Executor
 		return report;
 	}
 	
-	public NonParametric getTargetState()
+	public ArrayList<ContMultiSample> getTargetState()
 	{
 		return currentState;
 	}
 	
-	public void storeState(NonParametric distribution, ArrayList<ContVar> variables, 
+	public void storeState(ArrayList<ContMultiSample> distribution, ArrayList<ContVar> variables, 
 							String file) throws IOException
 	{
 		PrintWriter out			= new PrintWriter(new BufferedWriter(new FileWriter(file, false)));
@@ -663,7 +667,7 @@ public class VICAssimilator implements Executor
 		for (ContVar var : variables)
 			header					+= "\t" + var.getName();
 		out.println(header);
-		for (ContMultiSample sample : distribution.getSamples())
+		for (ContMultiSample sample : distribution)
 		{
 			ParticleWrapper part	= (ParticleWrapper)sample;
 			String line				= part.getId() + "\t" + part.getWeight();
@@ -674,7 +678,7 @@ public class VICAssimilator implements Executor
 		out.close();
 	}
 	
-	public void prepareForecast(NonParametric currentState, LocalDateTime dateTime,
+	public void prepareForecast(ArrayList<ContMultiSample> currentState, LocalDateTime dateTime,
 								String outputFolder) throws IOException
 	{
 		// Create mean streamflow file
@@ -687,7 +691,7 @@ public class VICAssimilator implements Executor
 		
 		// Prepare distribution
 		this.currentState					= currentState;
-		ArrayList<ContMultiSample> samples	= currentState.getSamples();
+		ArrayList<ContMultiSample> samples	= currentState;
 		for (int p = 0; p < samples.size(); p++)
 		{
 			String id						= "Particle " + (p + 1);
@@ -705,7 +709,7 @@ public class VICAssimilator implements Executor
 		}
 	}
 	
-	public NonParametric forecast(LocalDateTime forecastEnd, String folder,
+	public ArrayList<ContMultiSample> forecast(LocalDateTime forecastEnd, String folder,
 			boolean storeTimeSeries, boolean computePerformance, int threadCount,
 			boolean removeFolder) throws IOException
 	{
@@ -736,7 +740,7 @@ public class VICAssimilator implements Executor
 		}
 		
 		// Prepare mean streamflow
-		ParticleWrapper particle	= (ParticleWrapper) currentState.getSamples().get(0);
+		ParticleWrapper particle	= (ParticleWrapper) currentState.get(0);
 		LocalDateTime forecastStart	= particle.getEnd().plus(modelTimeStep);
 		LocalDateTime current		= forecastStart;
 		distForecastQ				= new Hashtable<>();
@@ -751,13 +755,13 @@ public class VICAssimilator implements Executor
 		}
 		
 		// Populate forecast queue
-		int sampleCount				= currentState.getSamples().size();
+		int sampleCount				= currentState.size();
 		forecastEndStates			= new ArrayList<>(sampleCount);
 		Path path					= FileSystems.getDefault().getPath(folder + "/Forecasts");
 		if (!Files.exists(path))
 			Files.createDirectory(path);
 		forecastQueue				= new ArrayBlockingQueue<>(sampleCount);
-		for (ContMultiSample sample : currentState.getSamples())
+		for (ContMultiSample sample : currentState)
 			forecastQueue.offer(sample);
 		
 		// Launch threads
@@ -899,7 +903,7 @@ public class VICAssimilator implements Executor
 			PrintWriter out		= new PrintWriter(new BufferedWriter(new FileWriter(file, false)));
 			out.println("Model\tWeight\tDischarge (l/s)");
 			ArrayList<PointSD> sorter = new ArrayList<>();
-			for (ContMultiSample sample : currentState.getSamples())
+			for (ContMultiSample sample : currentState)
 				sorter.add(new PointSD(((ParticleWrapper) sample).getId(),
 											sample.getWeight(), false));
 			Collections.sort(sorter);
@@ -937,7 +941,7 @@ public class VICAssimilator implements Executor
 		}
 		
 		// Return final distributions
-		return configurator.createDistribution(forecastEndStates);
+		return forecastEndStates;
 	}
 	
 	public Hashtable<LocalDateTime, KernelDensity> getDistForecastQ()

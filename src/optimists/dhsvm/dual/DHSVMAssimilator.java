@@ -62,7 +62,6 @@ import optimists.Particle;
 import optimists.ParticleWrapper;
 import optimists.dhsvm.DHSVMModel;
 import probDist.KernelDensity;
-import probDist.multiVar.MultiVarKernelDensity;
 import probDist.multiVar.NonParametric;
 import probDist.multiVar.tools.ContMultiSample;
 import probDist.multiVar.tools.GGMLiteCreator;
@@ -88,12 +87,12 @@ public class DHSVMAssimilator implements Executor
 	// Constants
 	// --------------------------------------------------------------------------------------------
 	
-	public final static String	DATE_TIME_FORMAT_FOLDER		= "yyyy-MM-dd HH.mm";
+	public final static String	DATE_TIME_FORMAT_FOLDER		= "yyyy-MM-dd_HH.mm";
 	public final static String	DATE_TIME_FORMAT_FLOW_1		= "MM.dd.yyyy-HH:mm:ss";
 	public final static String	DATE_TIME_FORMAT_FLOW_2		= "MM/dd/yyyy-HH:mm:ss";
 	public final static String	DATE_TIME_FORMAT_REPORT		= "MM/dd/yyyy HH:mm";
 	
-	public final static String	PARTICLE_ID_PREFIX			= "Particle";
+	public final static String	PARTICLE_ID_PREFIX			= "Particle_";
 	
 	public final static String	OBJ_ID_Q_NSE				= "Streamflow NSE";
 	public final static String	OBJ_ID_Q_MAE				= "Streamflow MAE";
@@ -104,6 +103,7 @@ public class DHSVMAssimilator implements Executor
 	public final static String	OBJ_ID_MAHALANOBIS_DIST		= "Source mean Mahalanobis distance";
 	public final static String	OBJ_ID_MAHALANOBIS_FORCE	= "Source Mahalanobis force";
 	public final static String	OBJ_ID_MEAN_MAHAL_FORCE		= "Source mean Mahalanobis force";
+	public final static String	OBJ_ID_MEAN_M_FORCE_LOO		= "Source mean -1 Maha. force";
 	public final static String	OBJ_ID_2_TERM_COST			= "2-term cost";
 	
 	public final static String	REPORT_FOLDER				= "/Reports";
@@ -115,6 +115,8 @@ public class DHSVMAssimilator implements Executor
 	// --------------------------------------------------------------------------------------------
 	
 	private DHSVMModel								defaultModel;
+	
+	private OPTIMISTS								assimilator;
 	
 	private Duration								modelTimeStep;
 	
@@ -134,7 +136,7 @@ public class DHSVMAssimilator implements Executor
 	private double									obsError;
 	private double									bkgrMultiplier;
 	
-	private NonParametric							currentState;
+	private ArrayList<ContMultiSample>				currentState;
 	
 	private boolean									removeForecastFiles;
 	
@@ -152,6 +154,9 @@ public class DHSVMAssimilator implements Executor
 	private Hashtable<LocalDateTime, KernelDensity>	forecastSoilMoistureL2;
 	private Hashtable<LocalDateTime, KernelDensity>	forecastSoilMoistureL3;
 	
+	private long									totalDATime;
+	private long									totalModelingTime;
+	
 	// --------------------------------------------------------------------------------------------
 	// Constructor
 	// --------------------------------------------------------------------------------------------
@@ -162,10 +167,11 @@ public class DHSVMAssimilator implements Executor
 			ArrayList<MetStation> stations, String optionsFile, String areaFile,
 			String constantsFile, String dhsvmExec, boolean objQNSE, boolean objQMAE,
 			boolean objQMARE, boolean objIndeppdf, boolean objpdf, boolean objLogpdf,
-			boolean objMDist, boolean objMForce, boolean objMeanMForce, boolean obj2TermCost,
-			Hashtable<LocalDateTime, Double> obsQ, double obsError, double bkgrMultiplier)
-					throws IOException
+			boolean objMDist, boolean objMForce, boolean objMeanMForce, boolean objMeanMForceLOO,
+			boolean obj2TermCost, Hashtable<LocalDateTime, Double> obsQ, double obsError,
+			double bkgrMultiplier) throws IOException
 	{
+		this.assimilator			= null;
 		this.configurator			= configurator;
 		this.defaultParameters		= defaultParameters;
 		this.modelTimeStep			= modelTimeStep;
@@ -196,7 +202,9 @@ public class DHSVMAssimilator implements Executor
 		if (objMForce)
 			objectives.add(new Objective(objectives.size(), OBJ_ID_MAHALANOBIS_FORCE,	true	));
 		if (objMeanMForce)
-			objectives.add(new Objective(objectives.size(), OBJ_ID_MEAN_MAHAL_FORCE,	true	));	
+			objectives.add(new Objective(objectives.size(), OBJ_ID_MEAN_MAHAL_FORCE,	true	));
+		if (objMeanMForceLOO)
+			objectives.add(new Objective(objectives.size(), OBJ_ID_MEAN_M_FORCE_LOO,	true	));
 		if (obj2TermCost)
 			objectives.add(new Objective(objectives.size(), OBJ_ID_2_TERM_COST,			false	));
 		
@@ -237,16 +245,19 @@ public class DHSVMAssimilator implements Executor
 	// Methods
 	// --------------------------------------------------------------------------------------------
 
-	public NonParametric assimilate(String problemName, int runIndex, String outputFolder, 
-			String modelsFolder, boolean keepModelFiles, LocalDateTime start, MAESTRO maestro, 
-			LocalDateTime end, Duration daTimeStep, State exampleState, 
-			NonParametric initialState, ArrayList<ContVar> variables, int ensembleSize,
-			int candidateCount, int populationSize, int maxEvaluations, double samplePercentage,
-			double rootPercentage, int dimLimit, int distType, double scaling, boolean silverman,
-			GGMLiteCreator ggmCreator, boolean weightPerFront, double particleGreed,
-			int threadCount, boolean assimilatorReports, boolean maestroReports,
-			String hallOfFameFolder, long timeLimit) throws IOException
+	public ArrayList<ContMultiSample> assimilate(String problemName, int runIndex,
+			String outputFolder, String modelsFolder, boolean keepModelFiles, LocalDateTime start,
+			MAESTRO maestro, LocalDateTime end, Duration daTimeStep, State exampleState, 
+			ArrayList<ContMultiSample> initialState, ArrayList<ContVar> variables,
+			int ensembleSize, int candidateCount, int populationSize, int maxEvaluations,
+			double samplePercentage, double rootPercentage, int dimLimit, int distType,
+			double scaling, boolean silverman, GGMLiteCreator ggmCreator, boolean weightPerFront,
+			double particleGreed, int threadCount, boolean assimilatorReports,
+			boolean maestroReports, String hallOfFameFolder, long timeLimit) throws IOException
 	{
+		this.totalDATime				= 0;
+		this.totalModelingTime			= 0;
+		
 		// Create model files
 		this.modelsFolder				= modelsFolder;
 		createModelsFolders(modelsFolder);
@@ -286,8 +297,8 @@ public class DHSVMAssimilator implements Executor
 		// Create assimilator and parameterize
 		int weightingMode				= weightPerFront	? OPTIMISTS.WEIGHT_MODE_FRONT
 															: OPTIMISTS.WEIGHT_MODE_DOMINATION;
-		OPTIMISTS assimilator	= new OPTIMISTS(problemName, runIndex, defaultParticle, variables, 
-					objectives, reportFile, reportFolder, maestroReportFolder, hallOfFameFolder);
+		assimilator = new OPTIMISTS(problemName, runIndex, defaultParticle, variables, objectives,
+								reportFile, reportFolder, maestroReportFolder, hallOfFameFolder);
 		if (maestro != null)
 			assimilator.setMaestro(				maestro				);
 		assimilator.setEnsembleSize(			ensembleSize		);
@@ -335,10 +346,12 @@ public class DHSVMAssimilator implements Executor
 			stepTimeLimit		= (int)(timeRemaining/(totalSteps - currentStep) - overTime);
 			
 			// Perform assimilation
-			NonParametric newState	= new MultiVarKernelDensity();
-			while (newState.getSamples().size() == 0)
+			ArrayList<ContMultiSample> newState = new ArrayList<>();
+			long timeStart					= System.currentTimeMillis();
+			while (newState.size() == 0)
 				newState					= assimilator.performDATimeStep(current, timeStepEnd, 
 												currentState, stepTimeLimit);
+			totalDATime						+= System.currentTimeMillis() - timeStart;
 			currentState					= newState;
 			
 			// Store mean streamflow
@@ -375,7 +388,8 @@ public class DHSVMAssimilator implements Executor
 				} catch (Exception e) {}
 		}
 		
-		System.out.println("");
+		System.out.println("Total assimilation time = " + totalDATime +
+							" ms; total modeling time = " + totalModelingTime + " ms\n");
 		
 		return currentState;
 	}
@@ -402,7 +416,7 @@ public class DHSVMAssimilator implements Executor
 	}
 
 	private void writeMeanStreamflow(Duration daTimeStep, String meanQFile, LocalDateTime current, 
-										NonParametric currentState) throws IOException
+								ArrayList<ContMultiSample> currentState) throws IOException
 	{
 		PrintWriter out;
 		DateTimeFormatter formatter;
@@ -410,9 +424,9 @@ public class DHSVMAssimilator implements Executor
 		int modelTimeSteps				= (int) daTimeStep.toHours();
 		for (int t = 0; t < modelTimeSteps; t++)
 			qStats.add(new ContSeries(true));
-		for (int s = 0; s < currentState.getSamples().size(); s++)
+		for (int s = 0; s < currentState.size(); s++)
 		{
-			ContMultiSample sample		= currentState.getSamples().get(s);
+			ContMultiSample sample		= currentState.get(s);
 			ParticleWrapper wrapper		= (ParticleWrapper) sample;
 			DHSVMParticle particle		= (DHSVMParticle) wrapper.getParticle();
 			ArrayList<Double> q			= particle.getStreamflow();
@@ -440,12 +454,13 @@ public class DHSVMAssimilator implements Executor
 			ArrayList<Double> valueArray)
 	{
 		// Prepare data
+		long timeStart						= System.currentTimeMillis();
 		State initState						= null;
 				
 		// Prepare files
 		DateTimeFormatter formatter			= DateTimeFormatter.ofPattern(DATE_TIME_FORMAT_FOLDER);
 		String runFolder					= modelsFolder + "/" + formatter.format(start) 
-												+ "/Particle " + index;
+												+ "/Particle_" + index;
 		String stateFolder					= runFolder + "/state";
 		String outputFolder					= runFolder + "/output";
 		String configFile					= runFolder + "/Configuration.txt";
@@ -488,6 +503,7 @@ public class DHSVMAssimilator implements Executor
 			throw new RuntimeException("Could not create model files: " + e.getMessage());
 		}
 		
+		String id							= PARTICLE_ID_PREFIX + index;
 		String error						= "";
 		State endState						= null;
 		ArrayList<Double> endArray			= null;
@@ -496,10 +512,12 @@ public class DHSVMAssimilator implements Executor
 		try
 		{
 			// Run model
-			ProcessBuilder pb				= new ProcessBuilder(dhsvmExec, configFile);
+			String os				= System.getProperty("os.name").toLowerCase();
+			String processParameter	= os.indexOf("win") >= 0 ? configFile : "Configuration.txt";
+			ProcessBuilder pb		= new ProcessBuilder(dhsvmExec, processParameter);
 			pb.directory(new File(runFolder));
-			Process process					= pb.start();
-			BufferedReader br				= new BufferedReader(new InputStreamReader(
+			Process process			= pb.start();
+			BufferedReader br		= new BufferedReader(new InputStreamReader(
 																	process.getInputStream()));
 			while (br.readLine() != null)
 			{
@@ -518,7 +536,6 @@ public class DHSVMAssimilator implements Executor
 			fitness							= computeFitness(valueArray, modeledQ);
 		} catch (IOException e)
 		{
-			String id						= PARTICLE_ID_PREFIX + " " + index;
 			String line						= formatter.format(start) + " - " + id + ": ";
 			error							= e.getMessage();
 			line							+= error;
@@ -535,7 +552,6 @@ public class DHSVMAssimilator implements Executor
 		}
 		
 		// Create particle
-		String id							= PARTICLE_ID_PREFIX + " " + index;
 		ArrayList<Double> streamflow		= new ArrayList<>();
 		LocalDateTime current				= start.plus(modelTimeStep);
 		while (!current.isAfter(end))
@@ -565,6 +581,7 @@ public class DHSVMAssimilator implements Executor
 		}
 		
 		// Return particle
+		totalModelingTime					+= System.currentTimeMillis() - timeStart;
 		return particle;
 	}
 	
@@ -639,28 +656,31 @@ public class DHSVMAssimilator implements Executor
 			boolean ok						= true;
 			double fitVal					= Double.NaN;
 			double[] source					= Utilities.toArray(initialStateArray);
+			NonParametric sourceDist		= assimilator.getCurrentSourceStateDist();
 			try
 			{
 				if (objID.equals(OBJ_ID_Q_NSE) || objID.equals(OBJ_ID_Q_MAE) 
 						|| objID.equals(OBJ_ID_Q_MARE			))
 					fitVal					= getFitnessQ(modeledQ, objID);
 				else if (objID.equals(OBJ_ID_INDEP_PDF			))
-					fitVal					= currentState.getMeanIndeppdf(				source);
+					fitVal					= sourceDist.getMeanIndeppdf(				source);
 				else if (objID.equals(OBJ_ID_PDF				))
-					fitVal					= currentState.getpdf(						source);
+					fitVal					= sourceDist.getpdf(						source);
 				else if (objID.equals(OBJ_ID_LOG_PDF			))
-					fitVal					= currentState.getLogpdf(					source);
+					fitVal					= sourceDist.getLogpdf(						source);
 				else if (objID.equals(OBJ_ID_MAHALANOBIS_DIST	))
-					fitVal					= currentState.getMeanMahalanobisDistance(	source);
+					fitVal					= sourceDist.getMeanMahalanobisDistance(	source);
 				else if (objID.equals(OBJ_ID_MAHALANOBIS_FORCE	))
-					fitVal					= currentState.getMahalanobisForce(			source);
+					fitVal					= sourceDist.getMahalanobisForce(			source);
 				else if (objID.equals(OBJ_ID_MEAN_MAHAL_FORCE	))
-					fitVal					= currentState.getMeanMahalanobisForce(		source);
+					fitVal					= sourceDist.getMeanMahalanobisForce(		source);
+				else if (objID.equals(OBJ_ID_MEAN_M_FORCE_LOO	))
+					fitVal					= sourceDist.getMeanMahalanobisForceLOO(	source);
 				else if (objID.equals(OBJ_ID_2_TERM_COST))
 				{
 					double obsCost			= getFitnessQ(modeledQ, objID);
 					double[] ssArr			= Utilities.toArray(initialStateArray);
-					double distances[]	 	= currentState.getMahalanobisDistanceToSamples(ssArr);
+					double distances[]	 	= sourceDist.getMahalanobisDistanceToSamples(ssArr);
 					double bkgrCost			= 0.0;
 					for (int d = 0; d < distances.length; d++)
 						bkgrCost			+= distances[d];
@@ -770,7 +790,7 @@ public class DHSVMAssimilator implements Executor
 		return array;
 	}
 	
-	public void prepareForecast(NonParametric currentState, LocalDateTime dateTime,
+	public void prepareForecast(ArrayList<ContMultiSample> samples, LocalDateTime dateTime,
 								String outputFolder) throws IOException
 	{
 		// Create mean streamflow file
@@ -780,11 +800,10 @@ public class DHSVMAssimilator implements Executor
 		out.close();
 		
 		// Prepare distribution
-		this.currentState					= currentState;
-		ArrayList<ContMultiSample> samples	= currentState.getSamples();
+		this.currentState					= samples;
 		for (int p = 0; p < samples.size(); p++)
 		{
-			String id						= "Particle " + (p + 1);
+			String id						= PARTICLE_ID_PREFIX + (p + 1);
 			ContMultiSample sample			= samples.get(p);
 			ArrayList<Double> valueArray	= sample.getValues();
 			ModelConfiguration config		= configurator.configure(valueArray, dateTime,
@@ -802,9 +821,9 @@ public class DHSVMAssimilator implements Executor
 		}
 	}
 	
-	public NonParametric forecast(LocalDateTime forecastEnd, String folder, int threadCount, 
-						LocalDateTime performanceStart, ArrayList<LocalDateTime> statesToSave,
-						boolean removeFolder, long timeLimit) throws IOException
+	public ArrayList<ContMultiSample> forecast(LocalDateTime forecastEnd, String folder,
+			int threadCount, LocalDateTime performanceStart, ArrayList<LocalDateTime> statesToSave,
+			boolean removeFolder, long timeLimit) throws IOException
 	{
 		System.out.println("Starting forecast...");
 		this.forecastFolder			= folder;
@@ -818,7 +837,7 @@ public class DHSVMAssimilator implements Executor
 			createModelsFolders(folder);
 		
 		// Prepare distributions of forecasted outputs
-		ParticleWrapper particle	= (ParticleWrapper) currentState.getSamples().get(0);
+		ParticleWrapper particle	= (ParticleWrapper) currentState.get(0);
 		LocalDateTime forecastStart	= particle.getEnd().plus(modelTimeStep);
 		LocalDateTime current		= forecastStart;
 		forecastStreamflow			= new Hashtable<>();
@@ -845,10 +864,10 @@ public class DHSVMAssimilator implements Executor
 			createModelsFolders(folder);
 		
 		// Populate forecast queue
-		int sampleCount				= currentState.getSamples().size();
+		int sampleCount				= currentState.size();
 		forecastEndStates			= new ArrayList<>(sampleCount);
 		forecastQueue				= new ArrayBlockingQueue<>(sampleCount);
-		for (ContMultiSample sample : currentState.getSamples())
+		for (ContMultiSample sample : currentState)
 			forecastQueue.offer(sample);
 		
 		// Launch threads
@@ -960,7 +979,7 @@ public class DHSVMAssimilator implements Executor
 		out						= new PrintWriter(new BufferedWriter(new FileWriter(file, false)));
 		out.println("Model\tWeight\tDischarge (l/s)");
 		ArrayList<PointSD> sorter = new ArrayList<>();
-		for (ContMultiSample sample : currentState.getSamples())
+		for (ContMultiSample sample : currentState)
 			sorter.add(new PointSD(((ParticleWrapper) sample).getId(), sample.getWeight(), false));
 		Collections.sort(sorter);
 		for (int p = sorter.size() - 1; p >= 0; p--)
@@ -991,7 +1010,7 @@ public class DHSVMAssimilator implements Executor
 			{
 				synchronized (forecastEndStates)
 				{
-					return configurator.createDistribution(forecastEndStates);
+					return forecastEndStates;
 				}
 			} catch (Exception e)
 			{
@@ -1029,6 +1048,16 @@ public class DHSVMAssimilator implements Executor
 	public Hashtable<LocalDateTime, KernelDensity> getForecastSoilMoistureL3()
 	{
 		return forecastSoilMoistureL3;
+	}
+	
+	public long getTotalDATime()
+	{
+		return totalDATime;
+	}
+	
+	public long getTotalModelingTime()
+	{
+		return totalModelingTime;
 	}
 
 	@Override
@@ -1079,18 +1108,21 @@ public class DHSVMAssimilator implements Executor
 										false, statesToSave);
 				
 				// Run forecast
-				ProcessBuilder pb		= new ProcessBuilder(dhsvmExec, configFile);
+				String os				= System.getProperty("os.name").toLowerCase();
+				String processParameter	= os.indexOf("win") >= 0 ? configFile : "Configuration.txt";
+				ProcessBuilder pb		= new ProcessBuilder(dhsvmExec, processParameter);
 				pb.directory(new File(runFolder));
 				Process process			= pb.start();
 				BufferedReader br		= new BufferedReader(new InputStreamReader(
 																		process.getInputStream()));
-				while (br.readLine() != null)
+				String line;
+				while ((line = br.readLine()) != null)
 				{
 					synchronized (this)	{try {wait(1);} catch (InterruptedException e) {}}
 				}
 				
 				// Retrieve target outputs
-				String line				= particleID + "\t" + sample.getWeight() + "\t";
+				line					= particleID + "\t" + sample.getWeight() + "\t";
 				Hashtable<LocalDateTime, Double> q		= getHydrograph(	outputFolder);
 				Hashtable<LocalDateTime, Double> ev		= getEvaporation(	outputFolder);
 				Hashtable<LocalDateTime, double[]> sm	= getSoilMoisture(	outputFolder);

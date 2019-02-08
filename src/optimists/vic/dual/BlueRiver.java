@@ -31,7 +31,6 @@ import java.io.IOException;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashSet;
 import java.util.Hashtable;
@@ -203,9 +202,9 @@ public class BlueRiver implements ModelConfigurator
 		BlueRiver configurator		= new BlueRiver(soils, network, exampleState, directFractions,
 														dimLimit, corrThreshold, distributionType,
 														scaling, silverman, ggmCreator);
-		NonParametric initialState = createInitialState(initStateFile, variables, ensembleSize,
-													distributionType, scaling, silverman, dimLimit,
-													ggmCreator, corrThreshold, configurator);
+		ArrayList<ContMultiSample> initialState = createInitialState(initStateFile, variables,
+												ensembleSize, distributionType, scaling, silverman,
+												dimLimit, ggmCreator, corrThreshold, configurator);
 		
 		// Initialize optimizer
 		MAESTRO maestro					= new MAESTRO("", 0, null, null, false, true);
@@ -285,7 +284,7 @@ public class BlueRiver implements ModelConfigurator
 		return variables;
 	}
 	
-	private static NonParametric createInitialState(String initStateFile,
+	private static ArrayList<ContMultiSample> createInitialState(String initStateFile,
 				ArrayList<ContVar> variables, int sampleCount, int distType, double scaling, 
 				boolean silverman, int dimLimit, GGMLiteCreator ggmCreator, double corrThreshold,
 				ModelConfigurator configurator) throws FileNotFoundException
@@ -322,11 +321,7 @@ public class BlueRiver implements ModelConfigurator
 		scanner.close();
 		
 		// Create distribution
-		Collections.shuffle(samples);
-		int origSize						= samples.size();
-		for (int s = sampleCount; s < origSize; s++)
-			samples.remove(samples.size() - 1);
-		return configurator.createDistribution(samples);
+		return samples;
 	}
 	
 	private static Hashtable<LocalDateTime, Double> loadObsHydrograph(String fileRoute, 
